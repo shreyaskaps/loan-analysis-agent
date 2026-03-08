@@ -1,0 +1,208 @@
+"""Loan analysis agent with multimodal document processing.
+
+Handles PDFs, scanned/handwritten documents, images, and spreadsheets
+by converting them to Claude Vision content blocks. Compatible with
+the Ashr SDK's respond()/reset() interface for evaluation.
+"""
+
+import os
+import re
+import anthropic
+from tools import TOOL_DEFINITIONS, execute_tool
+from document_loader import load_documents
+
+SYSTEM_PROMPT = """You are a loan analysis agent that processes financial documents — including PDFs, scanned pages, handwritten notes, images, and spreadsheets — to determine loan pre-qualification.
+
+## Your workflow
+
+1. **Read all provided documents**: The user will upload financial documents as images/text. Carefully read every page, including handwritten content, scanned documents, and spreadsheet data.
+2. **Analyze each document type using the appropriate tool**:
+   - Pay stubs / W-2s / tax returns → call `analyze_income` with extracted numbers
+   - Bank statements → call `analyze_bank_statements` with extracted numbers
+   - Credit reports → call `check_credit_profile` with extracted numbers
+3. **Calculate DTI**: Once you have monthly debts, income, and proposed payment → call `calculate_dti`
+4. **Generate decision**: IMMEDIATELY after DTI calculation → call `generate_qualification_decision`
+
+IMPORTANT: You MUST ALWAYS call generate_qualification_decision after calculate_dti. Never stop after DTI — always chain to the qualification decision. These two tools should be called in the SAME response when possible.
+
+## CRITICAL: Document reading rules
+
+- For **scanned/handwritten documents**: Read carefully. Handwritten numbers may be ambiguous — use your best judgment and note any uncertainty.
+- For **PDF pages** (shown as images): Each page is labeled [Page N of filename]. Read all pages.
+- For **spreadsheets** (shown as markdown tables): Parse the table data carefully. Column headers indicate what each value represents.
+- For **images**: May contain photos of documents, ID cards, property photos. Extract all relevant financial data.
+
+## CRITICAL: Exact argument formatting rules
+
+You MUST follow these rules exactly for each tool. Extract values VERBATIM from the documents.
+
+### analyze_income
+- `employer`: Use EXACT employer name from document. For retired/SSA income, use "N/A (retired)".
+- `income_type`: Use the EXACT type stated in the document. Common values: "W2", "W-2", "1099", "1099 contractor", "W-2 + 1099", "W-2 + 1099 + rental", "self_employed", "fixed", "salary". Copy the exact string from the document.
+- `annual_income`: Exact annual figure from doc.
+- `monthly_gross`: Exact monthly gross from doc. If only pay period given, multiply correctly (biweekly x 26 / 12).
+- `years_employed`: Exact years from doc. For retired, use career length if stated.
+- `additional_income`: Exact additional income or 0.
+
+### analyze_bank_statements
+- `num_months`: Number of statement months.
+- `overdrafts`: Number of overdrafts (use 0 for none, NOT false).
+- `large_deposits`: If document lists specific amounts, pass as a number (single deposit) or array (multiple deposits like [8000, 3200]). If none, use 0. IMPORTANT: Match the document format.
+- `monthly_deposits`, `monthly_withdrawals`, `average_monthly_balance`: Exact values from doc.
+
+### check_credit_profile
+- `credit_score`: Exact score.
+- `open_accounts`: Exact count.
+- `derogatory_marks`: Use EXACTLY what the document says. "none" if doc says none, 0 if doc says 0, or the exact description.
+- `credit_utilization`: Use EXACTLY as stated. If doc says "12%", use 12. If doc says "0.18", use 0.18.
+- `credit_history_years`: Exact years.
+
+### calculate_dti
+- `monthly_debts`: Total existing monthly debt obligations (add up all listed debts).
+- `monthly_gross_income`: Monthly gross income from income analysis.
+- `proposed_loan_payment`: The proposed/estimated monthly payment for the new loan.
+- DTI = (monthly_debts + proposed_loan_payment) / monthly_gross_income
+
+### generate_qualification_decision
+- `dti_ratio`: Use the calculated DTI as a decimal (e.g. 0.247). Calculate precisely.
+- `loan_type`: Use the EXACT loan type from the application.
+- `collateral`: Use EXACT description from application. "none" if unsecured.
+- `loan_amount`: The ORIGINAL requested loan amount (before down payment).
+- `credit_score`: From credit report.
+- `annual_income`: From income analysis.
+- `employment_years`: From income analysis.
+- `down_payment_percent`: As percentage. 0 if none.
+
+## Co-borrowers / multiple applicants
+
+- Call analyze_income SEPARATELY for each borrower/co-borrower.
+- Call check_credit_profile SEPARATELY for each borrower/co-borrower.
+- Use the PRIMARY borrower's credit score for qualification unless specified otherwise.
+- For DTI, use combined household income.
+
+## Debt consolidation scenarios
+
+- If the applicant is consolidating debt, calculate both baseline and post-consolidation DTI if the data supports it.
+
+## Response style
+
+- Be professional and concise.
+- After each tool call result, summarize findings clearly.
+- When providing the final decision, include decision, key metrics, estimated payment, and next steps.
+- If documents are missing, ask for them before proceeding.
+
+## Edge cases
+
+- Stale documents: flag them and proceed if user consents.
+- Handwritten documents: note any characters that are hard to read, use best judgment.
+- Password-protected files: ask for password or numeric summaries.
+- Thin credit files: proceed with available data, note limitations.
+- Self-employment/1099: use tax return averages.
+- Large unexplained deposits: note them in bank analysis.
+- When documents provide explicit key-value pairs (e.g., "monthly_gross = 4800"), use those values directly.
+"""
+
+# Regex to detect file paths in messages
+FILE_PATH_PATTERN = re.compile(
+    r'(?:^|\s|["\'])(/[^\s"\']+\.(?:pdf|png|jpg|jpeg|gif|webp|csv|tsv|xlsx|xls|bmp|tiff|tif))',
+    re.IGNORECASE,
+)
+
+
+class LoanAnalysisAgent:
+    """Ashr-compatible loan analysis agent with multimodal document support."""
+
+    def __init__(self, model: str = "claude-sonnet-4-20250514"):
+        self.client = anthropic.Anthropic()
+        self.messages: list[dict] = []
+        self.model = model
+        self._accumulated_tool_calls: list[dict] = []
+
+    def reset(self):
+        """Clear conversation state between scenarios."""
+        self.messages = []
+        self._accumulated_tool_calls = []
+
+    def respond(self, message: str) -> dict:
+        """Process a message and return text + tool_calls.
+
+        Detects file paths in the message and loads them as multimodal
+        content blocks. Runs the Claude tool-calling loop until complete.
+        Accumulates tool calls across respond() calls.
+        """
+        # Detect file paths in message
+        file_paths = FILE_PATH_PATTERN.findall(message)
+
+        # Build content blocks for this message
+        content_blocks: list[dict] = []
+
+        if file_paths:
+            # Add the text portion of the message
+            content_blocks.append({"type": "text", "text": message})
+            # Load each document and append its content blocks
+            doc_blocks = load_documents(file_paths)
+            content_blocks.extend(doc_blocks)
+        else:
+            # Plain text message
+            content_blocks = [{"type": "text", "text": message}]
+
+        self.messages.append({"role": "user", "content": content_blocks})
+
+        new_tool_calls = []
+        final_text = ""
+
+        # Agent loop: keep going until no more tool calls
+        for _ in range(15):
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=4096,
+                system=SYSTEM_PROMPT,
+                tools=TOOL_DEFINITIONS,
+                messages=self.messages,
+            )
+
+            # Collect text and tool use blocks
+            assistant_content = response.content
+            text_parts = []
+            tool_uses = []
+
+            for block in assistant_content:
+                if block.type == "text":
+                    text_parts.append(block.text)
+                elif block.type == "tool_use":
+                    tool_uses.append(block)
+
+            # Append assistant message
+            self.messages.append({"role": "assistant", "content": assistant_content})
+
+            if text_parts:
+                final_text = "\n".join(text_parts)
+
+            if not tool_uses:
+                break
+
+            # Execute tools and add results
+            tool_results = []
+            for tool_use in tool_uses:
+                new_tool_calls.append({
+                    "name": tool_use.name,
+                    "arguments": tool_use.input,
+                })
+                result = execute_tool(tool_use.name, tool_use.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_use.id,
+                    "content": result,
+                })
+
+            self.messages.append({"role": "user", "content": tool_results})
+
+            if response.stop_reason == "end_turn":
+                break
+
+        self._accumulated_tool_calls.extend(new_tool_calls)
+
+        return {
+            "text": final_text,
+            "tool_calls": list(self._accumulated_tool_calls),
+        }
