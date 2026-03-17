@@ -77,7 +77,11 @@ You MUST follow these rules exactly for each tool. Extract values VERBATIM from 
 ### calculate_dti
 - `monthly_debts`: Total existing monthly debt obligations (add up all listed debts).
 - `monthly_gross_income`: Monthly gross income from income analysis.
-- `proposed_loan_payment`: The proposed/estimated monthly payment for the new loan.
+- `proposed_loan_payment`: The monthly payment for the new loan. You MUST use one of these sources (in priority order):
+  1. **User-stated payment**: If the user or documents state an explicit monthly payment amount, use that exact number.
+  2. **Ask the user**: If the user provided a loan amount but NO monthly payment and NO interest rate or term, ASK the user for the expected monthly payment (or rate and term) before calling calculate_dti. Do NOT fabricate a payment.
+  3. **Calculate from loan details**: If the user provides the loan amount AND interest rate AND term, compute the payment using standard amortization: P = L[r(1+r)^n]/[(1+r)^n - 1] where L=loan amount, r=monthly rate, n=total months. State your calculation in your response.
+  NEVER guess or invent a proposed_loan_payment. Using a fabricated payment produces a wrong DTI and a wrong qualification decision.
 - DTI = (monthly_debts + proposed_loan_payment) / monthly_gross_income
 
 ### generate_qualification_decision
