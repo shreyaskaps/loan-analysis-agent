@@ -31,10 +31,7 @@ IMPORTANT: You MUST ALWAYS call generate_qualification_decision after calculate_
 
 IMPORTANT: If the user provides ALL the needed financial data in their message, call ALL tools in sequence without asking follow-up questions.
 
-IMPORTANT: Do NOT call a tool if you are missing REQUIRED fields for it. Each tool requires ALL its required fields to have real values from the user/documents — not guesses or zeros. Specifically:
-- Do NOT call `check_credit_profile` until you have real values for ALL of: credit_score, open_accounts, credit_utilization, credit_history_years. If the user only gave you a credit score but not the others, ASK for the missing fields before calling the tool.
-- Do NOT call `calculate_dti` until you know the exact monthly debts, monthly gross income, and proposed loan payment.
-- If the user provides partial information, respond asking for the specific missing fields. Then call the tools once you have everything.
+IMPORTANT: Call tools immediately with whatever data the user has provided. If a required field is truly absent (not mentioned anywhere in the conversation), use a reasonable placeholder (e.g., 0 for unknown numeric fields) and note the assumption — do NOT ask follow-up questions unless an entire document category (income, bank statements, or credit) is completely missing with no data at all provided. Prefer proceeding with partial data over asking clarifying questions.
 
 ## CRITICAL: Document reading rules
 
