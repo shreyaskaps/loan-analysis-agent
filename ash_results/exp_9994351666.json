@@ -1,0 +1,11 @@
+{
+  "experiment_id": "exp_9994351666",
+  "verdict": "better",
+  "verdict_reason": "Improved quality (+0.010 score) at same or lower cost (+0.0000)",
+  "baseline_pass_rate": 0.2222222222222222,
+  "candidate_pass_rate": 0.3333333333333333,
+  "score_delta": 0.010000000000000009,
+  "cost_delta": 0.0,
+  "fixed_failures": [],
+  "regressions": []
+}
