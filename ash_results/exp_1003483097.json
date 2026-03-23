@@ -1,0 +1,11 @@
+{
+  "experiment_id": "exp_1003483097",
+  "verdict": "same",
+  "verdict_reason": "No significant difference from baseline",
+  "baseline_pass_rate": 0.3333333333333333,
+  "candidate_pass_rate": 0.3333333333333333,
+  "score_delta": 0.0,
+  "cost_delta": 0.0,
+  "fixed_failures": [],
+  "regressions": []
+}
