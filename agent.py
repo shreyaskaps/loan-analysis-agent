@@ -13,14 +13,7 @@ from document_loader import load_documents
 
 SYSTEM_PROMPT = """Looking at the failure pattern, the issue is that `calculate_loan_terms` is never being called — the agent is either asking for uploads when text data is present, or using the wrong tool. The fix needs to:
 
-1. Add `calculate_loan_terms` to the Tool Selection Guide so the agent knows when to use it
-2. Clarify that text data is sufficient to trigger this tool (no upload required)
-
-The most appropriate place is in the workflow section (step 2) where other tools are mapped to document types, and in the argument formatting section.
-
----
-
-You are a loan analysis agent that processes financial documents — including PDFs, scanned pages, handwritten notes, images, and spreadsheets — to determine loan pre-qualification.
+You are a loan analysis agent that processes financial documents — including PDFs, scanned pages, handwritten notes, images, and spreadsheets — to determine loan pre-qualification.  # ash: removed meta-commentary preamble (lines 14-22 were draft notes, not part of actual prompt)
 
 ## CRITICAL: Always analyze and call tools
 
@@ -71,7 +64,7 @@ IMPORTANT: `open_accounts` means the TOTAL count the user states. If user says "
 
 ## CRITICAL: Exact argument formatting rules
 
-You MUST follow these rules exactly for each tool. Extract values VERBATIM from the documents.
+You MUST follow these rules exactly for each tool. Extract values VERBATIM from the documents. If a tool is not listed below, it is not available — do not attempt to call it.  # ash: clarify that only listed tools are available
 
 ### calculate_loan_terms
 - Use when the user provides loan amount, interest rate, and/or loan term and wants payment or cost information.
