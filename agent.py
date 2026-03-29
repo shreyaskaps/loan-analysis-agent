@@ -95,7 +95,7 @@ You MUST follow these rules exactly for each tool. Extract values VERBATIM from 
 ### check_credit_profile
 - `credit_score`: Exact score.
 - `open_accounts`: Exact count.
-- `derogatory_marks`: Use EXACTLY what the document says. "none" if doc says none, 0 if doc says 0, or the exact description.
+- `derogatory_marks`: Number of derogatory marks. Use 0 if the document says "none" or has no derogatory marks. Always pass as a number.
 - `credit_utilization`: Use EXACTLY as stated. If doc says "12%", use 12. If doc says "0.18", use 0.18.
 - `credit_history_years`: Exact years.
 

@@ -43,8 +43,8 @@ TOOL_DEFINITIONS = [
             "properties": {
                 "credit_score": {"type": "number", "description": "Credit score (FICO or Vantage equivalent)"},
                 "open_accounts": {"type": "number", "description": "Number of open credit accounts"},
-                "derogatory_marks": {"description": "Number of derogatory marks or 'none'"},
-                "credit_utilization": {"description": "Credit utilization as decimal (0.18) or percentage (18)"},
+                "derogatory_marks": {"type": "number", "description": "Number of derogatory marks (use 0 if none)"},
+                "credit_utilization": {"type": "number", "description": "Credit utilization as decimal (0.18) or percentage (18)"},
                 "credit_history_years": {"type": "number", "description": "Length of credit history in years"},
             },
             "required": ["credit_score", "open_accounts", "derogatory_marks", "credit_utilization", "credit_history_years"],
@@ -123,6 +123,34 @@ def execute_tool(name: str, arguments: dict) -> str:
         derog = arguments.get("derogatory_marks", 0)
         util = arguments.get("credit_utilization", 0)
         history = arguments.get("credit_history_years", 0)
+
+        # Coerce derogatory_marks: "none"/None/False/[] → 0, string digits → int
+        if isinstance(derog, bool):
+            derog = 0
+        elif derog is None:
+            derog = 0
+        elif isinstance(derog, str):
+            if derog.lower().strip() in ("none", "null", "n/a", ""):
+                derog = 0
+            else:
+                try:
+                    derog = int(derog)
+                except (ValueError, TypeError):
+                    derog = 0
+        elif isinstance(derog, list):
+            derog = len(derog) if derog else 0
+
+        # Coerce credit_utilization: string percentages → float, booleans → 0
+        if isinstance(util, bool):
+            util = 0
+        elif util is None:
+            util = 0
+        elif isinstance(util, str):
+            cleaned = util.strip().rstrip("%")
+            try:
+                util = float(cleaned)
+            except (ValueError, TypeError):
+                util = 0
         rating = "excellent" if score >= 750 else "good" if score >= 700 else "fair" if score >= 650 else "below average"
         return (
             f"Credit profile check complete. Score: {score} ({rating}). "
