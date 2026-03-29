@@ -26,7 +26,11 @@ TOOL_DEFINITIONS = [
                 "num_months": {"type": "number", "description": "Number of months of statements provided"},
                 "overdrafts": {"type": "number", "description": "Number of overdrafts in the statement period"},
                 "large_deposits": {
-                    "description": "Large or unusual deposits. Single number or array of amounts. Use 0 if none.",
+                    "description": "Large or unusual deposits. Single number or array of numbers. Use 0 if none.",
+                    "oneOf": [
+                        {"type": "number"},
+                        {"type": "array", "items": {"type": "number"}},
+                    ],
                 },
                 "monthly_deposits": {"type": "number", "description": "Average monthly deposit amount"},
                 "monthly_withdrawals": {"type": "number", "description": "Average monthly withdrawal amount"},
@@ -106,8 +110,20 @@ def execute_tool(name: str, arguments: dict) -> str:
         balance = arguments.get("average_monthly_balance", 0)
         deposits = arguments.get("monthly_deposits", 0)
         withdrawals = arguments.get("monthly_withdrawals", 0)
-        overdrafts = arguments.get("overdrafts", 0)
-        large = arguments.get("large_deposits", 0)
+        # Normalize overdrafts: boolean false or 0 both mean no overdrafts
+        overdrafts_raw = arguments.get("overdrafts", 0)
+        overdrafts = 0 if overdrafts_raw is False else overdrafts_raw
+        # Normalize large_deposits: boolean false, string "none"/"null"/"0", or
+        # empty list are all treated as 0 (no large deposits).
+        large_raw = arguments.get("large_deposits", 0)
+        if large_raw is False or large_raw is None:
+            large = 0
+        elif isinstance(large_raw, str) and large_raw.strip().lower() in ("none", "null", "false", "0", ""):
+            large = 0
+        elif isinstance(large_raw, list) and len(large_raw) == 0:
+            large = 0
+        else:
+            large = large_raw
         overdraft_note = "No overdrafts detected." if overdrafts == 0 else f"{overdrafts} overdraft(s) detected in the period."
         return (
             f"Bank statement analysis complete ({months} months). "
