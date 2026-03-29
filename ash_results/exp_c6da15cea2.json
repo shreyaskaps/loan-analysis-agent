@@ -1,0 +1,11 @@
+{
+  "experiment_id": "exp_c6da15cea2",
+  "verdict": "better",
+  "verdict_reason": "Auto-approved (no eval needed): Prompt edit for tool_arg_error \u2014 correctness fix, production errors are evidence",
+  "baseline_pass_rate": 0.0,
+  "candidate_pass_rate": 0.0,
+  "score_delta": 0.0,
+  "cost_delta": 0.0,
+  "fixed_failures": [],
+  "regressions": []
+}
