@@ -43,8 +43,8 @@ TOOL_DEFINITIONS = [
             "properties": {
                 "credit_score": {"type": "number", "description": "Credit score (FICO or Vantage equivalent)"},
                 "open_accounts": {"type": "number", "description": "Number of open credit accounts"},
-                "derogatory_marks": {"description": "Number of derogatory marks or 'none'"},
-                "credit_utilization": {"description": "Credit utilization as decimal (0.18) or percentage (18)"},
+                "derogatory_marks": {"type": "number", "description": "Number of derogatory marks (use 0 for none)"},
+                "credit_utilization": {"type": "number", "description": "Credit utilization as decimal (0.18) or percentage (18)"},
                 "credit_history_years": {"type": "number", "description": "Length of credit history in years"},
             },
             "required": ["credit_score", "open_accounts", "derogatory_marks", "credit_utilization", "credit_history_years"],
