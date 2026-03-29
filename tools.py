@@ -84,15 +84,129 @@ TOOL_DEFINITIONS = [
 ]
 
 
+# --------------------------------------------------------------------------
+# Input-coercion helpers
+# --------------------------------------------------------------------------
+
+_FALSY_STRINGS = {"none", "null", "false", "n/a", "", "0"}
+
+
+def _coerce_number(val, default: float = 0) -> float:
+    """Coerce val to a float, returning *default* for any bad/missing input.
+
+    Handles: None, False, True, empty string, strings like "none"/"null"/"false",
+    lists (returns default), and regular numeric strings.
+    """
+    if val is None or val is False:
+        return default
+    if val is True:
+        return 1.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        if val.strip().lower() in _FALSY_STRINGS:
+            return default
+        # Strip leading $ and commas so "$1,200" → 1200
+        cleaned = val.strip().lstrip("$").replace(",", "")
+        try:
+            return float(cleaned)
+        except ValueError:
+            return default
+    # lists, dicts, etc. → default
+    return default
+
+
+def _coerce_str(val, default: str = "") -> str:
+    """Coerce val to a clean string, returning *default* for None/False/null-ish."""
+    if val is None or val is False:
+        return default
+    if val is True:
+        return "true"
+    if isinstance(val, str):
+        if val.strip().lower() in {"none", "null"}:
+            return default
+        return val
+    return str(val)
+
+
+def _coerce_large_deposits(val):
+    """Normalise large_deposits to either 0 (empty) or a list of floats."""
+    # Falsy / empty signals
+    if val is None or val is False or val == [] or val == 0:
+        return 0
+    if isinstance(val, str):
+        stripped = val.strip().lower()
+        if stripped in _FALSY_STRINGS:
+            return 0
+        # Try JSON decode first
+        import json as _json
+        try:
+            parsed = _json.loads(val)
+            return _coerce_large_deposits(parsed)
+        except (ValueError, TypeError):
+            pass
+        # Single numeric string
+        cleaned = stripped.lstrip("$").replace(",", "")
+        try:
+            return [float(cleaned)]
+        except ValueError:
+            return 0
+    if isinstance(val, (int, float)):
+        return [float(val)]
+    if isinstance(val, list):
+        result = []
+        for item in val:
+            if isinstance(item, dict):
+                amount = item.get("amount", item)
+                result.append(_coerce_number(amount))
+            else:
+                result.append(_coerce_number(item))
+        return result if result else 0
+    return 0
+
+
+def _coerce_derogatory(val) -> str:
+    """Normalise derogatory_marks to a display string."""
+    if val is None or val is False or val == [] or val == 0 or val == "0":
+        return "none"
+    if isinstance(val, str):
+        stripped = val.strip().lower()
+        if stripped in {"none", "null", "false", "0", "n/a", ""}:
+            return "none"
+        return val.strip()
+    if isinstance(val, list):
+        if len(val) == 0:
+            return "none"
+        return ", ".join(str(x) for x in val)
+    return str(val)
+
+
+def _coerce_utilization(val) -> float:
+    """Normalise credit_utilization to a percentage float (e.g. 18.0 for 18%)."""
+    if val is None or val is False:
+        return 0.0
+    if isinstance(val, bool):
+        return 0.0
+    num = _coerce_number(val, default=0.0)
+    # If expressed as a decimal fraction (< 1), convert to percent
+    if 0 < num < 1:
+        return round(num * 100, 2)
+    return round(num, 2)
+
+
+# --------------------------------------------------------------------------
+# Tool executor
+# --------------------------------------------------------------------------
+
 def execute_tool(name: str, arguments: dict) -> str:
     """Execute a tool and return a result string."""
     if name == "analyze_income":
-        monthly = arguments.get("monthly_gross", 0)
-        annual = arguments.get("annual_income", 0)
-        employer = arguments.get("employer", "Unknown")
-        income_type = arguments.get("income_type", "Unknown")
-        years = arguments.get("years_employed", 0)
-        additional = arguments.get("additional_income", 0)
+        monthly = _coerce_number(arguments.get("monthly_gross"), 0)
+        annual = _coerce_number(arguments.get("annual_income"), 0)
+        employer = _coerce_str(arguments.get("employer"), "Unknown")
+        income_type = _coerce_str(arguments.get("income_type"), "Unknown")
+        years = _coerce_number(arguments.get("years_employed"), 0)
+        additional = _coerce_number(arguments.get("additional_income"), 0)
         return (
             f"Income analysis complete. Employer: {employer}. "
             f"Income type: {income_type}. Annual income: ${annual:,.0f}. "
@@ -102,15 +216,15 @@ def execute_tool(name: str, arguments: dict) -> str:
         )
 
     elif name == "analyze_bank_statements":
-        months = arguments.get("num_months", 0)
-        balance = arguments.get("average_monthly_balance", 0)
-        deposits = arguments.get("monthly_deposits", 0)
-        withdrawals = arguments.get("monthly_withdrawals", 0)
-        overdrafts = arguments.get("overdrafts", 0)
-        large = arguments.get("large_deposits", 0)
-        overdraft_note = "No overdrafts detected." if overdrafts == 0 else f"{overdrafts} overdraft(s) detected in the period."
+        months = _coerce_number(arguments.get("num_months"), 0)
+        balance = _coerce_number(arguments.get("average_monthly_balance"), 0)
+        deposits = _coerce_number(arguments.get("monthly_deposits"), 0)
+        withdrawals = _coerce_number(arguments.get("monthly_withdrawals"), 0)
+        overdrafts = _coerce_number(arguments.get("overdrafts"), 0)
+        large = _coerce_large_deposits(arguments.get("large_deposits"))
+        overdraft_note = "No overdrafts detected." if overdrafts == 0 else f"{int(overdrafts)} overdraft(s) detected in the period."
         return (
-            f"Bank statement analysis complete ({months} months). "
+            f"Bank statement analysis complete ({int(months)} months). "
             f"Average monthly balance: ${balance:,.0f}. "
             f"Monthly deposits: ${deposits:,.0f}. Monthly withdrawals: ${withdrawals:,.0f}. "
             f"{overdraft_note} Large deposits: {large}. "
@@ -118,22 +232,22 @@ def execute_tool(name: str, arguments: dict) -> str:
         )
 
     elif name == "check_credit_profile":
-        score = arguments.get("credit_score", 0)
-        accounts = arguments.get("open_accounts", 0)
-        derog = arguments.get("derogatory_marks", 0)
-        util = arguments.get("credit_utilization", 0)
-        history = arguments.get("credit_history_years", 0)
+        score = _coerce_number(arguments.get("credit_score"), 0)
+        accounts = _coerce_number(arguments.get("open_accounts"), 0)
+        derog = _coerce_derogatory(arguments.get("derogatory_marks"))
+        util = _coerce_utilization(arguments.get("credit_utilization"))
+        history = _coerce_number(arguments.get("credit_history_years"), 0)
         rating = "excellent" if score >= 750 else "good" if score >= 700 else "fair" if score >= 650 else "below average"
         return (
-            f"Credit profile check complete. Score: {score} ({rating}). "
-            f"Open accounts: {accounts}. Derogatory marks: {derog}. "
-            f"Credit utilization: {util}. Credit history: {history} years. "
+            f"Credit profile check complete. Score: {int(score)} ({rating}). "
+            f"Open accounts: {int(accounts)}. Derogatory marks: {derog}. "
+            f"Credit utilization: {util}%. Credit history: {history} years. "
         )
 
     elif name == "calculate_dti":
-        debts = arguments.get("monthly_debts", 0)
-        income = arguments.get("monthly_gross_income", 0)
-        payment = arguments.get("proposed_loan_payment", 0)
+        debts = _coerce_number(arguments.get("monthly_debts"), 0)
+        income = _coerce_number(arguments.get("monthly_gross_income"), 0)
+        payment = _coerce_number(arguments.get("proposed_loan_payment"), 0)
         total = debts + payment
         dti = total / income if income > 0 else 0
         return (
@@ -143,14 +257,14 @@ def execute_tool(name: str, arguments: dict) -> str:
         )
 
     elif name == "generate_qualification_decision":
-        dti = arguments.get("dti_ratio", 0)
-        loan_type = arguments.get("loan_type", "")
-        amount = arguments.get("loan_amount", 0)
-        score = arguments.get("credit_score", 0)
-        collateral = arguments.get("collateral", "none")
-        income = arguments.get("annual_income", 0)
-        years = arguments.get("employment_years", 0)
-        down = arguments.get("down_payment_percent", 0)
+        dti = _coerce_number(arguments.get("dti_ratio"), 0)
+        loan_type = _coerce_str(arguments.get("loan_type"), "unknown")
+        amount = _coerce_number(arguments.get("loan_amount"), 0)
+        score = _coerce_number(arguments.get("credit_score"), 0)
+        collateral = _coerce_str(arguments.get("collateral"), "none")
+        income = _coerce_number(arguments.get("annual_income"), 0)
+        years = _coerce_number(arguments.get("employment_years"), 0)
+        down = _coerce_number(arguments.get("down_payment_percent"), 0)
 
         qualified = dti < 0.50 and score >= 580
         decision = "CONDITIONALLY APPROVED" if qualified else "FURTHER REVIEW NEEDED"
@@ -158,7 +272,7 @@ def execute_tool(name: str, arguments: dict) -> str:
         return (
             f"Qualification decision: {decision}. "
             f"Loan type: {loan_type}. Amount: ${amount:,.0f}. "
-            f"Credit score: {score}. DTI: {dti:.1%}. "
+            f"Credit score: {int(score)}. DTI: {dti:.1%}. "
             f"Annual income: ${income:,.0f}. Employment: {years} years. "
             f"Collateral: {collateral}. Down payment: {down}%. "
         )
