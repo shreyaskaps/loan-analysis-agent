@@ -1,5 +1,52 @@
 """Tool definitions and implementations for the loan analysis agent."""
 
+import json
+
+
+def _to_number(val, default=0):
+    """Coerce a value to a number. Handles booleans, numeric strings, None."""
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return 1 if val else 0
+    if isinstance(val, (int, float)):
+        return val
+    if isinstance(val, str):
+        # Strip whitespace, $, %, commas
+        cleaned = val.strip().replace("$", "").replace(",", "").replace("%", "")
+        if cleaned.lower() in ("none", "null", "n/a", ""):
+            return default
+        try:
+            return float(cleaned)
+        except ValueError:
+            return default
+    return default
+
+
+def _normalize_large_deposits(val):
+    """Normalize large_deposits to a number or list of numbers. Handles booleans, None, strings."""
+    if val is None or val is False or val == "none" or val == "None" or val == "null":
+        return 0
+    if isinstance(val, bool):
+        return 0
+    if isinstance(val, (int, float)):
+        return val
+    if isinstance(val, list):
+        return [_to_number(x) for x in val]
+    if isinstance(val, str):
+        # Try parsing as JSON array
+        try:
+            parsed = json.loads(val)
+            if isinstance(parsed, list):
+                return [_to_number(x) for x in parsed]
+            if isinstance(parsed, (int, float)):
+                return parsed
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return _to_number(val, 0)
+    return 0
+
+
 TOOL_DEFINITIONS = [
     {
         "name": "analyze_income",
@@ -26,6 +73,10 @@ TOOL_DEFINITIONS = [
                 "num_months": {"type": "number", "description": "Number of months of statements provided"},
                 "overdrafts": {"type": "number", "description": "Number of overdrafts in the statement period"},
                 "large_deposits": {
+                    "anyOf": [
+                        {"type": "number"},
+                        {"type": "array", "items": {"type": "number"}},
+                    ],
                     "description": "Large or unusual deposits. Single number or array of amounts. Use 0 if none.",
                 },
                 "monthly_deposits": {"type": "number", "description": "Average monthly deposit amount"},
@@ -43,8 +94,8 @@ TOOL_DEFINITIONS = [
             "properties": {
                 "credit_score": {"type": "number", "description": "Credit score (FICO or Vantage equivalent)"},
                 "open_accounts": {"type": "number", "description": "Number of open credit accounts"},
-                "derogatory_marks": {"description": "Number of derogatory marks or 'none'"},
-                "credit_utilization": {"description": "Credit utilization as decimal (0.18) or percentage (18)"},
+                "derogatory_marks": {"type": "number", "description": "Number of derogatory marks. Use 0 if none."},
+                "credit_utilization": {"type": "number", "description": "Credit utilization as a number — decimal (0.18) or percentage (18)"},
                 "credit_history_years": {"type": "number", "description": "Length of credit history in years"},
             },
             "required": ["credit_score", "open_accounts", "derogatory_marks", "credit_utilization", "credit_history_years"],
@@ -87,12 +138,12 @@ TOOL_DEFINITIONS = [
 def execute_tool(name: str, arguments: dict) -> str:
     """Execute a tool and return a result string."""
     if name == "analyze_income":
-        monthly = arguments.get("monthly_gross", 0)
-        annual = arguments.get("annual_income", 0)
+        monthly = _to_number(arguments.get("monthly_gross", 0))
+        annual = _to_number(arguments.get("annual_income", 0))
         employer = arguments.get("employer", "Unknown")
         income_type = arguments.get("income_type", "Unknown")
-        years = arguments.get("years_employed", 0)
-        additional = arguments.get("additional_income", 0)
+        years = _to_number(arguments.get("years_employed", 0))
+        additional = _to_number(arguments.get("additional_income", 0))
         return (
             f"Income analysis complete. Employer: {employer}. "
             f"Income type: {income_type}. Annual income: ${annual:,.0f}. "
@@ -102,12 +153,12 @@ def execute_tool(name: str, arguments: dict) -> str:
         )
 
     elif name == "analyze_bank_statements":
-        months = arguments.get("num_months", 0)
-        balance = arguments.get("average_monthly_balance", 0)
-        deposits = arguments.get("monthly_deposits", 0)
-        withdrawals = arguments.get("monthly_withdrawals", 0)
-        overdrafts = arguments.get("overdrafts", 0)
-        large = arguments.get("large_deposits", 0)
+        months = _to_number(arguments.get("num_months", 0))
+        balance = _to_number(arguments.get("average_monthly_balance", 0))
+        deposits = _to_number(arguments.get("monthly_deposits", 0))
+        withdrawals = _to_number(arguments.get("monthly_withdrawals", 0))
+        overdrafts = _to_number(arguments.get("overdrafts", 0))
+        large = _normalize_large_deposits(arguments.get("large_deposits", 0))
         overdraft_note = "No overdrafts detected." if overdrafts == 0 else f"{overdrafts} overdraft(s) detected in the period."
         return (
             f"Bank statement analysis complete ({months} months). "
@@ -118,11 +169,11 @@ def execute_tool(name: str, arguments: dict) -> str:
         )
 
     elif name == "check_credit_profile":
-        score = arguments.get("credit_score", 0)
-        accounts = arguments.get("open_accounts", 0)
-        derog = arguments.get("derogatory_marks", 0)
-        util = arguments.get("credit_utilization", 0)
-        history = arguments.get("credit_history_years", 0)
+        score = _to_number(arguments.get("credit_score", 0))
+        accounts = _to_number(arguments.get("open_accounts", 0))
+        derog = _to_number(arguments.get("derogatory_marks", 0))
+        util = _to_number(arguments.get("credit_utilization", 0))
+        history = _to_number(arguments.get("credit_history_years", 0))
         rating = "excellent" if score >= 750 else "good" if score >= 700 else "fair" if score >= 650 else "below average"
         return (
             f"Credit profile check complete. Score: {score} ({rating}). "
@@ -131,9 +182,9 @@ def execute_tool(name: str, arguments: dict) -> str:
         )
 
     elif name == "calculate_dti":
-        debts = arguments.get("monthly_debts", 0)
-        income = arguments.get("monthly_gross_income", 0)
-        payment = arguments.get("proposed_loan_payment", 0)
+        debts = _to_number(arguments.get("monthly_debts", 0))
+        income = _to_number(arguments.get("monthly_gross_income", 0))
+        payment = _to_number(arguments.get("proposed_loan_payment", 0))
         total = debts + payment
         dti = total / income if income > 0 else 0
         return (
@@ -143,14 +194,14 @@ def execute_tool(name: str, arguments: dict) -> str:
         )
 
     elif name == "generate_qualification_decision":
-        dti = arguments.get("dti_ratio", 0)
+        dti = _to_number(arguments.get("dti_ratio", 0))
         loan_type = arguments.get("loan_type", "")
-        amount = arguments.get("loan_amount", 0)
-        score = arguments.get("credit_score", 0)
+        amount = _to_number(arguments.get("loan_amount", 0))
+        score = _to_number(arguments.get("credit_score", 0))
         collateral = arguments.get("collateral", "none")
-        income = arguments.get("annual_income", 0)
-        years = arguments.get("employment_years", 0)
-        down = arguments.get("down_payment_percent", 0)
+        income = _to_number(arguments.get("annual_income", 0))
+        years = _to_number(arguments.get("employment_years", 0))
+        down = _to_number(arguments.get("down_payment_percent", 0))
 
         qualified = dti < 0.50 and score >= 580
         decision = "CONDITIONALLY APPROVED" if qualified else "FURTHER REVIEW NEEDED"
