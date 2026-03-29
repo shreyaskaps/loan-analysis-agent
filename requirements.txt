@@ -3,3 +3,5 @@ ashr-labs
 PyMuPDF
 openpyxl
 python-dotenv
+flask
+flask-cors

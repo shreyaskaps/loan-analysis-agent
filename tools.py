@@ -1,5 +1,7 @@
 """Tool definitions and implementations for the loan analysis agent."""
 
+import json
+
 TOOL_DEFINITIONS = [
     {
         "name": "analyze_income",
@@ -152,8 +154,23 @@ def execute_tool(name: str, arguments: dict) -> str:
         years = arguments.get("employment_years", 0)
         down = arguments.get("down_payment_percent", 0)
 
-        qualified = dti < 0.50 and score >= 580
-        decision = "CONDITIONALLY APPROVED" if qualified else "FURTHER REVIEW NEEDED"
+        # Qualification criteria: DTI < 50% and credit score >= 580
+        approved = dti < 0.50 and score >= 580
+        decision = "CONDITIONALLY APPROVED" if approved else "FURTHER REVIEW NEEDED"
+
+        # Return structured JSON so frontend can parse the decision
+        result = {
+            "decision": decision,
+            "approved": approved,
+            "loan_type": loan_type,
+            "loan_amount": amount,
+            "credit_score": score,
+            "dti_ratio": dti,
+            "annual_income": income,
+            "employment_years": years,
+            "collateral": collateral,
+            "down_payment_percent": down,
+        }
 
         return (
             f"Qualification decision: {decision}. "
@@ -161,6 +178,7 @@ def execute_tool(name: str, arguments: dict) -> str:
             f"Credit score: {score}. DTI: {dti:.1%}. "
             f"Annual income: ${income:,.0f}. Employment: {years} years. "
             f"Collateral: {collateral}. Down payment: {down}%. "
+            f"[STRUCTURED_DATA: {json.dumps(result)}]"
         )
 
     return f"Unknown tool: {name}"
