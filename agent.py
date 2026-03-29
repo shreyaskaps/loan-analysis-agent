@@ -13,14 +13,7 @@ from document_loader import load_documents
 
 SYSTEM_PROMPT = """Looking at the failure pattern, the issue is that `calculate_loan_terms` is never being called — the agent is either asking for uploads when text data is present, or using the wrong tool. The fix needs to:
 
-1. Add `calculate_loan_terms` to the Tool Selection Guide so the agent knows when to use it
-2. Clarify that text data is sufficient to trigger this tool (no upload required)
-
-The most appropriate place is in the workflow section (step 2) where other tools are mapped to document types, and in the argument formatting section.
-
----
-
-You are a loan analysis agent that processes financial documents — including PDFs, scanned pages, handwritten notes, images, and spreadsheets — to determine loan pre-qualification.
+You are a loan analysis agent that processes financial documents — including PDFs, scanned pages, handwritten notes, images, and spreadsheets — to determine loan pre-qualification.  # ash: removed meta-comment explaining the fix (lines 14-19)
 
 ## CRITICAL: Always analyze and call tools
 
@@ -32,7 +25,7 @@ Before calling any tool, match the user's request to the right tool:
 - `calculate_loan_terms`: Use when the user provides loan parameters (loan amount, interest rate, and/or loan term/duration) and wants to know payment amounts, total cost, or loan structure. Use this tool even if the data is provided as plain text — do NOT ask for a file upload. Do NOT use `analyze_income` or `calculate_dti` as a substitute for this.
 - `analyze_income`: Use ONLY when processing income documents (pay stubs, W-2s, 1099s, tax returns). Do NOT use for loan term/payment calculations.
 - `calculate_dti`: Use ONLY when computing debt-to-income ratio from known monthly debts, income, and proposed payment. Do NOT use as a substitute for `calculate_loan_terms`.
-- `generate_qualification_decision`: Use ONLY after `calculate_dti` to produce a final pre-qualification decision.
+- `generate_qualification_decision`: Use ONLY after `calculate_dti` to produce a final pre-qualification decision.  # ash: tool selection guide already includes calculate_loan_terms
 
 If the user provides loan amount, rate, or term data and asks about payments or loan structure, prefer `calculate_loan_terms` unless the user explicitly asks for a DTI or qualification decision.
 
@@ -80,7 +73,7 @@ You MUST follow these rules exactly for each tool. Extract values VERBATIM from 
 
 ### analyze_income
 - `employer`: Use EXACT employer name from document. For retired/SSA income, use "N/A (retired)".
-- `income_type`: Use the EXACT type stated in the document. Common values: "W2", "W-2", "1099", "1099 contractor", "W-2 + 1099", "W-2 + 1099 + rental", "self_employed", "fixed", "salary". Copy the exact string from the document.
+- `income_type`: Use the EXACT type stated in the document. ONLY these values are valid: "W2", "W-2", "1099", "1099 contractor", "W-2 + 1099", "W-2 + 1099 + rental", "self_employed", "fixed", "salary". Copy the exact string from the document. Do NOT invent values like 'employment', 'job', or 'work'.  # ash: clarify that income_type values are constrained (enum)
 - `annual_income`: Exact annual figure from doc.
 - `monthly_gross`: Exact monthly gross from doc. If only pay period given, multiply correctly (biweekly x 26 / 12).
 - `years_employed`: Exact years from doc. For retired, use career length if stated.
@@ -88,15 +81,15 @@ You MUST follow these rules exactly for each tool. Extract values VERBATIM from 
 
 ### analyze_bank_statements
 - `num_months`: Number of statement months.
-- `overdrafts`: Number of overdrafts (use 0 for none, NOT false).
+- `overdrafts`: Number of overdrafts (use 0 for none, NOT false or empty array).  # ash: clarify overdrafts must be numeric 0, not false/[]
 - `large_deposits`: If document lists specific amounts, pass as a number (single deposit) or array (multiple deposits like [8000, 3200]). If none, use 0. IMPORTANT: Match the document format.
 - `monthly_deposits`, `monthly_withdrawals`, `average_monthly_balance`: Exact values from doc.
 
 ### check_credit_profile
 - `credit_score`: Exact score.
 - `open_accounts`: Exact count.
-- `derogatory_marks`: Use EXACTLY what the document says. "none" if doc says none, 0 if doc says 0, or the exact description.
-- `credit_utilization`: Use EXACTLY as stated. If doc says "12%", use 12. If doc says "0.18", use 0.18.
+- `derogatory_marks`: Use EXACTLY what the document says. If doc says "none", pass integer 0. If doc says "0", pass integer 0. Do NOT pass string "none" or boolean false.  # ash: clarify derogatory_marks must be integer 0 for "none" case
+- `credit_utilization`: Use EXACTLY as stated. If doc says "12%", use 12 (integer). If doc says "0.18", use 0.18 (decimal). Prefer percentage format (12) over decimal (0.12).  # ash: clarify credit_utilization format preference
 - `credit_history_years`: Exact years.
 
 ### calculate_dti
@@ -107,8 +100,8 @@ You MUST follow these rules exactly for each tool. Extract values VERBATIM from 
 
 ### generate_qualification_decision
 - `dti_ratio`: Use the calculated DTI as a decimal (e.g. 0.247). Calculate precisely.
-- `loan_type`: Use snake_case format matching the application type: "personal_loan", "auto", "HELOC", "30-year fixed", "debt_consolidation", "working_capital", etc.
-- `collateral`: Use "unsecured" or "none" for unsecured loans. For secured loans, describe the collateral (e.g., "vehicle", property address).
+- `loan_type`: Use snake_case format matching the application type: "personal_loan", "auto_loan", "heloc", "mortgage_30_year_fixed", "debt_consolidation", "working_capital", etc. ONLY these formats are valid. Do NOT use "auto" or "HELOC" (not snake_case).  # ash: clarify loan_type must be strict snake_case enum
+- `collateral`: Use "unsecured" for unsecured loans (preferred). Do NOT use "none". For secured loans, describe the collateral (e.g., "vehicle", property address).  # ash: clarify collateral should prefer "unsecured" over "none"
 - `loan_amount`: The ORIGINAL requested loan amount (before down payment).
 - `credit_score`: From credit report.
 - `annual_income`: From income analysis.

@@ -8,7 +8,7 @@ TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {
                 "employer": {"type": "string", "description": "Employer name from pay stubs or tax docs"},
-                "income_type": {"type": "string", "description": "Income type: W2, 1099, W-2, W-2 + 1099, W-2 + 1099 + rental, SSA + pension, self-employed, etc."},
+                "income_type": {"type": "string", "description": "Income type: W2, 1099, W-2, W-2 + 1099, W-2 + 1099 + rental, SSA + pension, self-employed, etc.", "enum": ["W2", "W-2", "1099", "1099 contractor", "W-2 + 1099", "W-2 + 1099 + rental", "self_employed", "fixed", "salary"]},  # ash: add enum constraint to income_type
                 "annual_income": {"type": "number", "description": "Annual gross income in dollars"},
                 "monthly_gross": {"type": "number", "description": "Monthly gross income in dollars"},
                 "years_employed": {"type": "number", "description": "Years employed with current employer"},
@@ -26,7 +26,7 @@ TOOL_DEFINITIONS = [
                 "num_months": {"type": "number", "description": "Number of months of statements provided"},
                 "overdrafts": {"type": "number", "description": "Number of overdrafts in the statement period"},
                 "large_deposits": {
-                    "description": "Large or unusual deposits. Single number or array of amounts. Use 0 if none.",
+                    "type": ["number", "array"], "description": "Large or unusual deposits. Single number or array of amounts. Use 0 if none.",  # ash: add type specification for large_deposits (number or array)
                 },
                 "monthly_deposits": {"type": "number", "description": "Average monthly deposit amount"},
                 "monthly_withdrawals": {"type": "number", "description": "Average monthly withdrawal amount"},
@@ -43,8 +43,8 @@ TOOL_DEFINITIONS = [
             "properties": {
                 "credit_score": {"type": "number", "description": "Credit score (FICO or Vantage equivalent)"},
                 "open_accounts": {"type": "number", "description": "Number of open credit accounts"},
-                "derogatory_marks": {"description": "Number of derogatory marks or 'none'"},
-                "credit_utilization": {"description": "Credit utilization as decimal (0.18) or percentage (18)"},
+                "derogatory_marks": {"type": "number", "description": "Number of derogatory marks. Use 0 if none. Do NOT use string 'none' or boolean false."},  # ash: add type specification for derogatory_marks (must be number)
+                "credit_utilization": {"type": "number", "description": "Credit utilization as percentage (18) or decimal (0.18). Prefer percentage format."},  # ash: add type specification for credit_utilization (must be number)
                 "credit_history_years": {"type": "number", "description": "Length of credit history in years"},
             },
             "required": ["credit_score", "open_accounts", "derogatory_marks", "credit_utilization", "credit_history_years"],
@@ -70,8 +70,8 @@ TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {
                 "dti_ratio": {"type": "number", "description": "Calculated DTI ratio as decimal (e.g. 0.35)"},
-                "loan_type": {"type": "string", "description": "Loan type: personal_loan, auto_loan, HELOC, 30-year fixed, small_business, etc."},
-                "collateral": {"type": "string", "description": "Collateral description or 'none'/'unsecured'"},
+                "loan_type": {"type": "string", "description": "Loan type in snake_case: personal_loan, auto_loan, heloc, mortgage_30_year_fixed, debt_consolidation, working_capital, etc.", "enum": ["personal_loan", "auto_loan", "heloc", "mortgage_30_year_fixed", "mortgage_15_year_fixed", "debt_consolidation", "working_capital", "small_business"]},  # ash: add enum constraint to loan_type (strict snake_case)
+                "collateral": {"type": "string", "description": "Collateral description. Use 'unsecured' for unsecured loans. For secured loans, describe the collateral (e.g., 'vehicle', property address)."},  # ash: clarify collateral should prefer 'unsecured' over 'none'
                 "loan_amount": {"type": "number", "description": "Requested loan amount"},
                 "credit_score": {"type": "number", "description": "Borrower's credit score"},
                 "annual_income": {"type": "number", "description": "Borrower's annual income"},
