@@ -1,13 +1,14 @@
 """Loan analysis agent with multimodal document processing.
 
 Handles PDFs, scanned/handwritten documents, images, and spreadsheets
-by converting them to Claude Vision content blocks. Compatible with
+by converting them to OpenAI Vision content blocks. Compatible with
 the Ashr SDK's respond()/reset() interface for evaluation.
 """
 
 import os
 import re
-import anthropic
+import json
+import openai
 from tools import TOOL_DEFINITIONS, execute_tool
 from document_loader import load_documents
 
@@ -171,8 +172,8 @@ FILE_PATH_PATTERN = re.compile(
 class LoanAnalysisAgent:
     """Ashr-compatible loan analysis agent with multimodal document support."""
 
-    def __init__(self, model: str = "claude-sonnet-4-20250514"):
-        self.client = anthropic.Anthropic()
+    def __init__(self, model: str = "gpt-4o"):
+        self.client = openai.OpenAI()
         self.messages: list[dict] = []
         self.model = model
         self._accumulated_tool_calls: list[dict] = []
@@ -186,7 +187,7 @@ class LoanAnalysisAgent:
         """Process a message and return text + tool_calls.
 
         Detects file paths in the message and loads them as multimodal
-        content blocks. Runs the Claude tool-calling loop until complete.
+        content blocks. Runs the OpenAI tool-calling loop until complete.
         Accumulates tool calls across respond() calls.
         """
         # Detect file paths in message
@@ -212,52 +213,70 @@ class LoanAnalysisAgent:
 
         # Agent loop: keep going until no more tool calls
         for _ in range(15):
-            response = self.client.messages.create(
+            # Prepend system message for OpenAI API
+            messages_with_system = [{"role": "system", "content": SYSTEM_PROMPT}] + self.messages
+            
+            response = self.client.chat.completions.create(
                 model=self.model,
                 max_tokens=4096,
-                system=SYSTEM_PROMPT,
                 tools=TOOL_DEFINITIONS,
-                messages=self.messages,
+                messages=messages_with_system,
             )
 
             # Collect text and tool use blocks
-            assistant_content = response.content
+            assistant_message = response.choices[0].message
             text_parts = []
             tool_uses = []
 
-            for block in assistant_content:
-                if block.type == "text":
-                    text_parts.append(block.text)
-                elif block.type == "tool_use":
-                    tool_uses.append(block)
+            if assistant_message.content:
+                text_parts.append(assistant_message.content)
 
-            # Append assistant message
-            self.messages.append({"role": "assistant", "content": assistant_content})
+            if assistant_message.tool_calls:
+                tool_uses = assistant_message.tool_calls
+
+            # Append assistant message - OpenAI format with serialized tool_calls
+            msg_dict = {"role": "assistant", "content": assistant_message.content or ""}
+            if tool_uses:
+                # Serialize tool_calls to dicts for proper message reconstruction
+                msg_dict["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": tc.type,
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        }
+                    }
+                    for tc in tool_uses
+                ]
+            self.messages.append(msg_dict)
 
             if text_parts:
-                final_text = "\n".join(text_parts)
+                final_text = "\n".join([t for t in text_parts if t])
 
             if not tool_uses:
                 break
 
             # Execute tools and add results
             tool_results = []
-            for tool_use in tool_uses:
+            for tool_call in tool_uses:
+                # Parse arguments - OpenAI returns them as JSON string
+                args = tool_call.function.arguments
+                if isinstance(args, str):
+                    args = json.loads(args)
+                
                 new_tool_calls.append({
-                    "name": tool_use.name,
-                    "arguments": tool_use.input,
+                    "name": tool_call.function.name,
+                    "arguments": args,
                 })
-                result = execute_tool(tool_use.name, tool_use.input)
+                result = execute_tool(tool_call.function.name, args)
                 tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tool_use.id,
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
                     "content": result,
                 })
 
-            self.messages.append({"role": "user", "content": tool_results})
-
-            if response.stop_reason == "end_turn":
-                break
+            self.messages.extend(tool_results)
 
         self._accumulated_tool_calls.extend(new_tool_calls)
 
