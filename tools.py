@@ -2,6 +2,48 @@
 
 TOOL_DEFINITIONS = [
     {
+        "name": "calculate_loan_terms",
+        "description": (
+            "Calculate loan payment schedule and total cost given loan parameters. "
+            "Use this when the user provides a loan amount, interest rate, and/or loan term and wants to know "
+            "monthly payment, total interest, or overall loan structure. "
+            "Text data (e.g. 'I want a $15,000 loan at 7% for 48 months') is sufficient — no file upload required."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "loan_amount": {
+                    "type": "number",
+                    "description": (
+                        "Principal loan amount in dollars. "
+                        "Type: positive number. "
+                        "Example: 15000 for a $15,000 loan. "
+                        "Validation: must be > 0."
+                    ),
+                },
+                "annual_interest_rate": {
+                    "type": "number",
+                    "description": (
+                        "Annual interest rate as a percentage (not a decimal). "
+                        "Type: positive number. "
+                        "Example: 7.5 for 7.5% APR. "
+                        "Validation: must be >= 0. Use 0 for 0% promotional offers."
+                    ),
+                },
+                "loan_term_months": {
+                    "type": "number",
+                    "description": (
+                        "Loan term in months. "
+                        "Type: positive integer. "
+                        "Example: 48 for a 4-year loan, 360 for a 30-year mortgage. "
+                        "Validation: must be > 0. Convert years to months by multiplying by 12."
+                    ),
+                },
+            },
+            "required": ["loan_amount", "annual_interest_rate", "loan_term_months"],
+        },
+    },
+    {
         "name": "analyze_income",
         "description": "Analyze and verify income from uploaded pay stubs, W-2s, tax returns, or other income documentation. Call this tool after extracting income details from the user's uploaded documents.",
         "input_schema": {
@@ -86,7 +128,32 @@ TOOL_DEFINITIONS = [
 
 def execute_tool(name: str, arguments: dict) -> str:
     """Execute a tool and return a result string."""
-    if name == "analyze_income":
+    if name == "calculate_loan_terms":
+        principal = arguments.get("loan_amount", 0)
+        annual_rate = arguments.get("annual_interest_rate", 0)
+        term_months = arguments.get("loan_term_months", 0)
+        if term_months <= 0:
+            return "Error: loan_term_months must be greater than 0."
+        if annual_rate == 0:
+            monthly_payment = principal / term_months
+            total_paid = monthly_payment * term_months
+            total_interest = 0.0
+        else:
+            monthly_rate = annual_rate / 100 / 12
+            monthly_payment = principal * (monthly_rate * (1 + monthly_rate) ** term_months) / ((1 + monthly_rate) ** term_months - 1)
+            total_paid = monthly_payment * term_months
+            total_interest = total_paid - principal
+        return (
+            f"Loan term calculation complete. "
+            f"Loan amount: ${principal:,.2f}. "
+            f"Annual interest rate: {annual_rate}%. "
+            f"Term: {term_months} months. "
+            f"Estimated monthly payment: ${monthly_payment:,.2f}. "
+            f"Total amount paid: ${total_paid:,.2f}. "
+            f"Total interest: ${total_interest:,.2f}."
+        )
+
+    elif name == "analyze_income":
         monthly = arguments.get("monthly_gross", 0)
         annual = arguments.get("annual_income", 0)
         employer = arguments.get("employer", "Unknown")
