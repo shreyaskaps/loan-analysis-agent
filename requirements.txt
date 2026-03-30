@@ -1,4 +1,4 @@
-anthropic
+openai>=1.0.0
 ashr-labs
 PyMuPDF
 openpyxl

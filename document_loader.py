@@ -1,4 +1,4 @@
-"""Load documents (PDFs, images, CSVs, Excel) into Claude API content blocks."""
+"""Load documents (PDFs, images, CSVs, Excel) into OpenAI API content blocks."""
 
 import base64
 import csv

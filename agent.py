@@ -1,13 +1,14 @@
 """Loan analysis agent with multimodal document processing.
 
 Handles PDFs, scanned/handwritten documents, images, and spreadsheets
-by converting them to Claude Vision content blocks. Compatible with
+by converting them to OpenAI Vision content blocks. Compatible with
 the Ashr SDK's respond()/reset() interface for evaluation.
 """
 
 import os
 import re
-import anthropic
+import base64
+from openai import OpenAI
 from tools import TOOL_DEFINITIONS, execute_tool
 from document_loader import load_documents
 
@@ -171,8 +172,8 @@ FILE_PATH_PATTERN = re.compile(
 class LoanAnalysisAgent:
     """Ashr-compatible loan analysis agent with multimodal document support."""
 
-    def __init__(self, model: str = "claude-sonnet-4-20250514"):
-        self.client = anthropic.Anthropic()
+    def __init__(self, model: str = "gpt-4o"):
+        self.client = OpenAI()
         self.messages: list[dict] = []
         self.model = model
         self._accumulated_tool_calls: list[dict] = []
@@ -186,33 +187,35 @@ class LoanAnalysisAgent:
         """Process a message and return text + tool_calls.
 
         Detects file paths in the message and loads them as multimodal
-        content blocks. Runs the Claude tool-calling loop until complete.
+        content blocks. Runs the OpenAI tool-calling loop until complete.
         Accumulates tool calls across respond() calls.
         """
         # Detect file paths in message
         file_paths = FILE_PATH_PATTERN.findall(message)
 
-        # Build content blocks for this message
+        # Build content blocks for this message in OpenAI format
         content_blocks: list[dict] = []
 
         if file_paths:
             # Add the text portion of the message
             content_blocks.append({"type": "text", "text": message})
-            # Load each document and append its content blocks
+            # Load each document and append its content blocks (already in OpenAI format)
             doc_blocks = load_documents(file_paths)
             content_blocks.extend(doc_blocks)
         else:
             # Plain text message
             content_blocks = [{"type": "text", "text": message}]
 
-        self.messages.append({"role": "user", "content": content_blocks})
+        # Convert to OpenAI message format
+        user_message = {"role": "user", "content": content_blocks}
+        self.messages.append(user_message)
 
         new_tool_calls = []
         final_text = ""
 
         # Agent loop: keep going until no more tool calls
         for _ in range(15):
-            response = self.client.messages.create(
+            response = self.client.chat.completions.create(
                 model=self.model,
                 max_tokens=4096,
                 system=SYSTEM_PROMPT,
@@ -220,43 +223,51 @@ class LoanAnalysisAgent:
                 messages=self.messages,
             )
 
-            # Collect text and tool use blocks
-            assistant_content = response.content
+            # Collect text and tool call blocks
             text_parts = []
-            tool_uses = []
+            tool_calls_in_response = []
 
-            for block in assistant_content:
-                if block.type == "text":
-                    text_parts.append(block.text)
-                elif block.type == "tool_use":
-                    tool_uses.append(block)
+            for choice in response.choices:
+                if choice.message.content:
+                    text_parts.append(choice.message.content)
+                
+                if choice.message.tool_calls:
+                    tool_calls_in_response.extend(choice.message.tool_calls)
 
-            # Append assistant message
-            self.messages.append({"role": "assistant", "content": assistant_content})
+            # Append assistant message with all its content
+            assistant_message = {"role": "assistant", "content": response.choices[0].message.content or ""}
+            if tool_calls_in_response:
+                assistant_message["tool_calls"] = tool_calls_in_response
+            self.messages.append(assistant_message)
 
             if text_parts:
                 final_text = "\n".join(text_parts)
 
-            if not tool_uses:
+            if not tool_calls_in_response:
                 break
 
             # Execute tools and add results
-            tool_results = []
-            for tool_use in tool_uses:
+            tool_result_messages = []
+            for tool_call in tool_calls_in_response:
+                tool_name = tool_call.function.name
+                tool_args = eval(tool_call.function.arguments) if isinstance(tool_call.function.arguments, str) else tool_call.function.arguments
+                
                 new_tool_calls.append({
-                    "name": tool_use.name,
-                    "arguments": tool_use.input,
+                    "name": tool_name,
+                    "arguments": tool_args,
                 })
-                result = execute_tool(tool_use.name, tool_use.input)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tool_use.id,
+                
+                result = execute_tool(tool_name, tool_args)
+                tool_result_messages.append({
+                    "tool_call_id": tool_call.id,
+                    "role": "tool",
+                    "name": tool_name,
                     "content": result,
                 })
 
-            self.messages.append({"role": "user", "content": tool_results})
+            self.messages.extend(tool_result_messages)
 
-            if response.stop_reason == "end_turn":
+            if response.choices[0].finish_reason == "stop":
                 break
 
         self._accumulated_tool_calls.extend(new_tool_calls)
