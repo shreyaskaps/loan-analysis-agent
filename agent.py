@@ -1,13 +1,13 @@
 """Loan analysis agent with multimodal document processing.
 
 Handles PDFs, scanned/handwritten documents, images, and spreadsheets
-by converting them to Claude Vision content blocks. Compatible with
+by converting them to OpenAI Vision content blocks. Compatible with
 the Ashr SDK's respond()/reset() interface for evaluation.
 """
 
 import os
 import re
-import anthropic
+from openai import OpenAI
 from tools import TOOL_DEFINITIONS, execute_tool
 from document_loader import load_documents
 
@@ -171,8 +171,8 @@ FILE_PATH_PATTERN = re.compile(
 class LoanAnalysisAgent:
     """Ashr-compatible loan analysis agent with multimodal document support."""
 
-    def __init__(self, model: str = "claude-sonnet-4-20250514"):
-        self.client = anthropic.Anthropic()
+    def __init__(self, model: str = "gpt-4o"):
+        self.client = OpenAI()
         self.messages: list[dict] = []
         self.model = model
         self._accumulated_tool_calls: list[dict] = []
@@ -186,7 +186,7 @@ class LoanAnalysisAgent:
         """Process a message and return text + tool_calls.
 
         Detects file paths in the message and loads them as multimodal
-        content blocks. Runs the Claude tool-calling loop until complete.
+        content blocks. Runs the OpenAI tool-calling loop until complete.
         Accumulates tool calls across respond() calls.
         """
         # Detect file paths in message
@@ -212,27 +212,36 @@ class LoanAnalysisAgent:
 
         # Agent loop: keep going until no more tool calls
         for _ in range(15):
-            response = self.client.messages.create(
+            # Rebuild messages with system prompt for each API call
+            messages_for_api = [{"role": "system", "content": SYSTEM_PROMPT}] + self.messages
+            
+            response = self.client.chat.completions.create(
                 model=self.model,
                 max_tokens=4096,
-                system=SYSTEM_PROMPT,
                 tools=TOOL_DEFINITIONS,
-                messages=self.messages,
+                messages=messages_for_api,
             )
 
             # Collect text and tool use blocks
-            assistant_content = response.content
+            assistant_message = response.choices[0].message
             text_parts = []
             tool_uses = []
 
-            for block in assistant_content:
-                if block.type == "text":
-                    text_parts.append(block.text)
-                elif block.type == "tool_use":
-                    tool_uses.append(block)
+            if assistant_message.content:
+                text_parts.append(assistant_message.content)
+
+            if assistant_message.tool_calls:
+                for tool_call in assistant_message.tool_calls:
+                    tool_uses.append(tool_call)
 
             # Append assistant message
-            self.messages.append({"role": "assistant", "content": assistant_content})
+            assistant_msg = {
+                "role": "assistant",
+                "content": assistant_message.content,
+            }
+            if assistant_message.tool_calls:
+                assistant_msg["tool_calls"] = assistant_message.tool_calls
+            self.messages.append(assistant_msg)
 
             if text_parts:
                 final_text = "\n".join(text_parts)
@@ -240,23 +249,29 @@ class LoanAnalysisAgent:
             if not tool_uses:
                 break
 
-            # Execute tools and add results
-            tool_results = []
-            for tool_use in tool_uses:
+            # Execute tools and add results as separate tool messages
+            for tool_call in tool_uses:
+                tool_name = tool_call.function.name
+                tool_args = tool_call.function.arguments
+                
+                # Handle string arguments from OpenAI
+                if isinstance(tool_args, str):
+                    import json
+                    tool_args = json.loads(tool_args)
+                
                 new_tool_calls.append({
-                    "name": tool_use.name,
-                    "arguments": tool_use.input,
+                    "name": tool_name,
+                    "arguments": tool_args,
                 })
-                result = execute_tool(tool_use.name, tool_use.input)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tool_use.id,
-                    "content": result,
+                result = execute_tool(tool_name, tool_args)
+                # Append tool result as a separate message (OpenAI format)
+                self.messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": str(result),
                 })
 
-            self.messages.append({"role": "user", "content": tool_results})
-
-            if response.stop_reason == "end_turn":
+            if response.choices[0].finish_reason == "stop":
                 break
 
         self._accumulated_tool_calls.extend(new_tool_calls)

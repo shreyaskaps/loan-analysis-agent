@@ -1,4 +1,4 @@
-"""Load documents (PDFs, images, CSVs, Excel) into Claude API content blocks."""
+"""Load documents (PDFs, images, CSVs, Excel) into OpenAI API content blocks."""
 
 import base64
 import csv
@@ -25,9 +25,9 @@ MIME_TYPES = {
 
 
 def load_document(file_path: str) -> list[dict]:
-    """Convert a file into a list of Claude API content blocks.
+    """Convert a file into a list of OpenAI API content blocks.
 
-    Returns a list of dicts suitable for use in Claude message content arrays.
+    Returns a list of dicts suitable for use in OpenAI message content arrays.
     Images become base64-encoded image blocks, text becomes text blocks.
     """
     path = Path(file_path)
@@ -62,7 +62,7 @@ def load_documents(file_paths: list[str]) -> list[dict]:
 
 
 def _load_pdf(path: Path) -> list[dict]:
-    """Render each PDF page as a PNG image for Claude Vision."""
+    """Render each PDF page as a PNG image for OpenAI Vision."""
     try:
         import fitz  # PyMuPDF
     except ImportError:
