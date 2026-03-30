@@ -81,6 +81,19 @@ TOOL_DEFINITIONS = [
             "required": ["dti_ratio", "loan_type", "collateral", "loan_amount", "credit_score", "annual_income", "employment_years", "down_payment_percent"],
         },
     },
+    {
+        "name": "calculate_loan_terms",
+        "description": "Calculate monthly payments, total interest, and amortization schedule for a loan. Call this when the user provides loan amount, interest rate, and loan term (duration).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "loan_amount": {"type": "number", "description": "Principal loan amount in dollars"},
+                "annual_interest_rate": {"type": "number", "description": "Annual interest rate as percentage (e.g. 7.5 for 7.5%)"},
+                "loan_term_months": {"type": "number", "description": "Loan duration in months (e.g. 48 for 4-year loan)"},
+            },
+            "required": ["loan_amount", "annual_interest_rate", "loan_term_months"],
+        },
+    },
 ]
 
 
@@ -161,6 +174,88 @@ def execute_tool(name: str, arguments: dict) -> str:
             f"Credit score: {score}. DTI: {dti:.1%}. "
             f"Annual income: ${income:,.0f}. Employment: {years} years. "
             f"Collateral: {collateral}. Down payment: {down}%. "
+        )
+
+    elif name == "calculate_loan_terms":
+        principal = arguments.get("loan_amount", 0)
+        annual_rate = arguments.get("annual_interest_rate", 0)
+        term_months = arguments.get("loan_term_months", 0)
+
+        # Handle invalid inputs
+        if principal <= 0 or term_months <= 0 or annual_rate < 0:
+            return f"Error: Invalid loan amount (${principal}), term ({term_months} months), or interest rate ({annual_rate}%)."
+
+        # Convert annual rate (percentage) to monthly rate (decimal)
+        monthly_rate = annual_rate / 100 / 12
+
+        # Calculate monthly payment using standard amortization formula
+        # M = P * [r(1+r)^n] / [(1+r)^n - 1]
+        if monthly_rate > 0:
+            rate_factor = (1 + monthly_rate) ** term_months
+            monthly_payment = principal * (monthly_rate * rate_factor) / (rate_factor - 1)
+        else:
+            # No interest
+            monthly_payment = principal / term_months
+
+        total_paid = monthly_payment * term_months
+        total_interest = total_paid - principal
+
+        # Generate amortization schedule
+        amortization_schedule = []
+        remaining_balance = principal
+        
+        for month in range(1, int(term_months) + 1):
+            interest_payment = remaining_balance * monthly_rate
+            principal_payment = monthly_payment - interest_payment
+            remaining_balance -= principal_payment
+            
+            # Handle rounding errors on final payment
+            if month == int(term_months):
+                principal_payment = remaining_balance + principal_payment
+                remaining_balance = 0
+            
+            amortization_schedule.append({
+                "month": month,
+                "payment": monthly_payment,
+                "principal": principal_payment,
+                "interest": interest_payment,
+                "balance": max(0, remaining_balance)
+            })
+
+        # Format amortization schedule as text
+        schedule_text = "Amortization Schedule:\n"
+        schedule_text += "Month | Payment   | Principal | Interest  | Balance\n"
+        schedule_text += "------|-----------|-----------|-----------|----------\n"
+        
+        # Show first 3 months, last 3 months, and summary for long schedules
+        if term_months <= 12:
+            # Show all months for short loans
+            months_to_show = list(range(int(term_months)))
+        else:
+            # Show first 3, last 3, and ellipsis for long loans
+            months_to_show = list(range(3)) + list(range(int(term_months) - 3, int(term_months)))
+        
+        for i, month_data in enumerate(amortization_schedule):
+            if i in months_to_show or i < 3 or i >= len(amortization_schedule) - 3:
+                schedule_text += (
+                    f"{month_data['month']:5d} | "
+                    f"${month_data['payment']:8,.2f} | "
+                    f"${month_data['principal']:8,.2f} | "
+                    f"${month_data['interest']:8,.2f} | "
+                    f"${month_data['balance']:8,.2f}\n"
+                )
+            elif i == 3 and term_months > 12:
+                schedule_text += "  ... | ...       | ...       | ...       | ...\n"
+
+        return (
+            f"Loan terms calculation complete. "
+            f"Principal: ${principal:,.2f}. "
+            f"Annual interest rate: {annual_rate}%. "
+            f"Loan term: {term_months} months ({term_months / 12:.1f} years). "
+            f"Monthly payment: ${monthly_payment:,.2f}. "
+            f"Total amount paid: ${total_paid:,.2f}. "
+            f"Total interest: ${total_interest:,.2f}.\n\n"
+            f"{schedule_text}"
         )
 
     return f"Unknown tool: {name}"
