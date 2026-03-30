@@ -164,3 +164,142 @@ def execute_tool(name: str, arguments: dict) -> str:
         )
 
     return f"Unknown tool: {name}"
+
+
+# ── Claude Agent SDK MCP tool wrappers ─────────────────────────────────────
+import json as _json
+from typing import Any
+
+try:
+    from claude_agent_sdk import tool, create_sdk_mcp_server
+
+    @tool(
+        "analyze_income",
+        "Analyze and verify income from pay stubs, W-2s, tax returns, or other income documentation.",
+        {
+            "employer": str,
+            "income_type": str,
+            "annual_income": float,
+            "monthly_gross": float,
+            "years_employed": float,
+            "additional_income": float,
+        },
+    )
+    async def _mcp_analyze_income(args: dict[str, Any]) -> dict[str, Any]:
+        result = execute_tool("analyze_income", args)
+        return {"content": [{"type": "text", "text": result}]}
+
+    @tool(
+        "analyze_bank_statements",
+        "Analyze bank statements for cash flow health, reserves, overdrafts, and deposit patterns.",
+        {
+            "num_months": float,
+            "overdrafts": float,
+            "large_deposits": str,
+            "monthly_deposits": float,
+            "monthly_withdrawals": float,
+            "average_monthly_balance": float,
+        },
+    )
+    async def _mcp_analyze_bank_statements(args: dict[str, Any]) -> dict[str, Any]:
+        # large_deposits arrives as a JSON string from MCP; parse it back to number/list
+        ld = args.get("large_deposits", "0")
+        if isinstance(ld, str):
+            try:
+                ld = _json.loads(ld)
+            except (_json.JSONDecodeError, ValueError):
+                try:
+                    ld = float(ld)
+                except (TypeError, ValueError):
+                    ld = 0
+        args = dict(args)
+        args["large_deposits"] = ld
+        result = execute_tool("analyze_bank_statements", args)
+        return {"content": [{"type": "text", "text": result}]}
+
+    @tool(
+        "check_credit_profile",
+        "Check and evaluate a credit report.",
+        {
+            "credit_score": float,
+            "open_accounts": float,
+            "derogatory_marks": str,
+            "credit_utilization": str,
+            "credit_history_years": float,
+        },
+    )
+    async def _mcp_check_credit_profile(args: dict[str, Any]) -> dict[str, Any]:
+        # credit_utilization may arrive as a string ("12" or "0.12"); keep as-is for execute_tool
+        args = dict(args)
+        cu = args.get("credit_utilization", "0")
+        try:
+            args["credit_utilization"] = float(cu)
+        except (TypeError, ValueError):
+            pass
+        result = execute_tool("check_credit_profile", args)
+        return {"content": [{"type": "text", "text": result}]}
+
+    @tool(
+        "calculate_dti",
+        "Calculate debt-to-income ratio from monthly debts, gross income, and proposed loan payment.",
+        {
+            "monthly_debts": float,
+            "monthly_gross_income": float,
+            "proposed_loan_payment": float,
+        },
+    )
+    async def _mcp_calculate_dti(args: dict[str, Any]) -> dict[str, Any]:
+        result = execute_tool("calculate_dti", args)
+        return {"content": [{"type": "text", "text": result}]}
+
+    @tool(
+        "generate_qualification_decision",
+        "Generate a preliminary loan qualification decision based on all gathered data.",
+        {
+            "dti_ratio": float,
+            "loan_type": str,
+            "collateral": str,
+            "loan_amount": float,
+            "credit_score": float,
+            "annual_income": float,
+            "employment_years": float,
+            "down_payment_percent": float,
+        },
+    )
+    async def _mcp_generate_qualification_decision(args: dict[str, Any]) -> dict[str, Any]:
+        result = execute_tool("generate_qualification_decision", args)
+        return {"content": [{"type": "text", "text": result}]}
+
+    _MCP_TOOLS = [
+        _mcp_analyze_income,
+        _mcp_analyze_bank_statements,
+        _mcp_check_credit_profile,
+        _mcp_calculate_dti,
+        _mcp_generate_qualification_decision,
+    ]
+    _MCP_TOOL_NAMES = [
+        "mcp__loan_tools__analyze_income",
+        "mcp__loan_tools__analyze_bank_statements",
+        "mcp__loan_tools__check_credit_profile",
+        "mcp__loan_tools__calculate_dti",
+        "mcp__loan_tools__generate_qualification_decision",
+    ]
+
+    def build_loan_mcp_server():
+        """Return (server, allowed_tool_names) for use with ClaudeAgentOptions."""
+        server = create_sdk_mcp_server(
+            name="loan_tools",
+            version="1.0.0",
+            tools=_MCP_TOOLS,
+        )
+        return server, list(_MCP_TOOL_NAMES)
+
+    _CLAUDE_AGENT_SDK_AVAILABLE = True
+
+except ImportError:
+    _CLAUDE_AGENT_SDK_AVAILABLE = False
+
+    def build_loan_mcp_server():
+        raise ImportError(
+            "claude-agent-sdk is not installed. Run: pip install claude-agent-sdk"
+        )
