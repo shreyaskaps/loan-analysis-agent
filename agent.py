@@ -3,24 +3,30 @@
 Handles PDFs, scanned/handwritten documents, images, and spreadsheets
 by converting them to Claude Vision content blocks. Compatible with
 the Ashr SDK's respond()/reset() interface for evaluation.
+
+Powered by the Claude Agent SDK (claude_agent_sdk) with in-process
+MCP tools for loan analysis.
 """
 
-import os
+import asyncio
 import re
-import anthropic
-from tools import TOOL_DEFINITIONS, execute_tool
+
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    ResultMessage,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    create_sdk_mcp_server,
+    tool,
+)
+
 from document_loader import load_documents
+from tools import execute_tool
 
-SYSTEM_PROMPT = """Looking at the failure pattern, the issue is that `calculate_loan_terms` is never being called — the agent is either asking for uploads when text data is present, or using the wrong tool. The fix needs to:
-
-1. Add `calculate_loan_terms` to the Tool Selection Guide so the agent knows when to use it
-2. Clarify that text data is sufficient to trigger this tool (no upload required)
-
-The most appropriate place is in the workflow section (step 2) where other tools are mapped to document types, and in the argument formatting section.
-
----
-
-You are a loan analysis agent that processes financial documents — including PDFs, scanned pages, handwritten notes, images, and spreadsheets — to determine loan pre-qualification.
+SYSTEM_PROMPT = """You are a loan analysis agent that processes financial documents — including PDFs, scanned pages, handwritten notes, images, and spreadsheets — to determine loan pre-qualification.
 
 ## CRITICAL: Always analyze and call tools
 
@@ -167,101 +173,271 @@ FILE_PATH_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# ---------------------------------------------------------------------------
+# Tool definitions using the @tool decorator (in-process MCP)
+# ---------------------------------------------------------------------------
+
+@tool(
+    "analyze_income",
+    "Analyze and verify income from uploaded pay stubs, W-2s, tax returns, or other income documentation. Call this tool after extracting income details from the user's uploaded documents.",
+    {
+        "type": "object",
+        "properties": {
+            "employer": {"type": "string", "description": "Employer name from pay stubs or tax docs"},
+            "income_type": {"type": "string", "description": "Income type: W2, 1099, W-2, W-2 + 1099, W-2 + 1099 + rental, SSA + pension, self-employed, etc."},
+            "annual_income": {"type": "number", "description": "Annual gross income in dollars"},
+            "monthly_gross": {"type": "number", "description": "Monthly gross income in dollars"},
+            "years_employed": {"type": "number", "description": "Years employed with current employer"},
+            "additional_income": {"type": "number", "description": "Additional monthly or annual income (rental, freelance, etc). Use 0 if none."},
+        },
+        "required": ["employer", "income_type", "annual_income", "monthly_gross", "years_employed", "additional_income"],
+    },
+)
+async def _tool_analyze_income(args: dict) -> dict:
+    result = execute_tool("analyze_income", args)
+    return {"content": [{"type": "text", "text": result}]}
+
+
+@tool(
+    "analyze_bank_statements",
+    "Analyze bank statements for cash flow health, reserves, overdrafts, and deposit patterns. Call this after extracting bank statement details from user uploads.",
+    {
+        "type": "object",
+        "properties": {
+            "num_months": {"type": "number", "description": "Number of months of statements provided"},
+            "overdrafts": {"type": "number", "description": "Number of overdrafts in the statement period"},
+            "large_deposits": {
+                "description": "Large or unusual deposits. Single number or array of amounts. Use 0 if none.",
+            },
+            "monthly_deposits": {"type": "number", "description": "Average monthly deposit amount"},
+            "monthly_withdrawals": {"type": "number", "description": "Average monthly withdrawal amount"},
+            "average_monthly_balance": {"type": "number", "description": "Average monthly account balance"},
+        },
+        "required": ["num_months", "overdrafts", "large_deposits", "monthly_deposits", "monthly_withdrawals", "average_monthly_balance"],
+    },
+)
+async def _tool_analyze_bank_statements(args: dict) -> dict:
+    result = execute_tool("analyze_bank_statements", args)
+    return {"content": [{"type": "text", "text": result}]}
+
+
+@tool(
+    "check_credit_profile",
+    "Check and evaluate a credit report. Call this after extracting credit report details from user uploads.",
+    {
+        "type": "object",
+        "properties": {
+            "credit_score": {"type": "number", "description": "Credit score (FICO or Vantage equivalent)"},
+            "open_accounts": {"type": "number", "description": "Number of open credit accounts"},
+            "derogatory_marks": {"description": "Number of derogatory marks or 'none'"},
+            "credit_utilization": {"description": "Credit utilization as decimal (0.18) or percentage (18)"},
+            "credit_history_years": {"type": "number", "description": "Length of credit history in years"},
+        },
+        "required": ["credit_score", "open_accounts", "derogatory_marks", "credit_utilization", "credit_history_years"],
+    },
+)
+async def _tool_check_credit_profile(args: dict) -> dict:
+    result = execute_tool("check_credit_profile", args)
+    return {"content": [{"type": "text", "text": result}]}
+
+
+@tool(
+    "calculate_dti",
+    "Calculate debt-to-income ratio. Call this with the borrower's monthly debts, gross income, and proposed new loan payment.",
+    {
+        "type": "object",
+        "properties": {
+            "monthly_debts": {"type": "number", "description": "Total existing monthly debt payments (car, student loan, credit cards, etc.)"},
+            "monthly_gross_income": {"type": "number", "description": "Monthly gross income"},
+            "proposed_loan_payment": {"type": "number", "description": "Proposed monthly payment for the new loan"},
+        },
+        "required": ["monthly_debts", "monthly_gross_income", "proposed_loan_payment"],
+    },
+)
+async def _tool_calculate_dti(args: dict) -> dict:
+    result = execute_tool("calculate_dti", args)
+    return {"content": [{"type": "text", "text": result}]}
+
+
+@tool(
+    "generate_qualification_decision",
+    "Generate a preliminary loan qualification decision based on all gathered data. Call this after income analysis, bank analysis, credit check, and DTI calculation are complete.",
+    {
+        "type": "object",
+        "properties": {
+            "dti_ratio": {"type": "number", "description": "Calculated DTI ratio as decimal (e.g. 0.35)"},
+            "loan_type": {"type": "string", "description": "Loan type: personal_loan, auto_loan, HELOC, 30-year fixed, small_business, etc."},
+            "collateral": {"type": "string", "description": "Collateral description or 'none'/'unsecured'"},
+            "loan_amount": {"type": "number", "description": "Requested loan amount"},
+            "credit_score": {"type": "number", "description": "Borrower's credit score"},
+            "annual_income": {"type": "number", "description": "Borrower's annual income"},
+            "employment_years": {"type": "number", "description": "Years of employment"},
+            "down_payment_percent": {"type": "number", "description": "Down payment as percentage (0 if none)"},
+        },
+        "required": ["dti_ratio", "loan_type", "collateral", "loan_amount", "credit_score", "annual_income", "employment_years", "down_payment_percent"],
+    },
+)
+async def _tool_generate_qualification_decision(args: dict) -> dict:
+    result = execute_tool("generate_qualification_decision", args)
+    return {"content": [{"type": "text", "text": result}]}
+
+
+# Build the in-process MCP server that bundles all loan tools
+_LOAN_TOOLS_SERVER = create_sdk_mcp_server(
+    name="loan_tools",
+    version="1.0.0",
+    tools=[
+        _tool_analyze_income,
+        _tool_analyze_bank_statements,
+        _tool_check_credit_profile,
+        _tool_calculate_dti,
+        _tool_generate_qualification_decision,
+    ],
+)
+
+_ALLOWED_TOOLS = [
+    "mcp__loan_tools__analyze_income",
+    "mcp__loan_tools__analyze_bank_statements",
+    "mcp__loan_tools__check_credit_profile",
+    "mcp__loan_tools__calculate_dti",
+    "mcp__loan_tools__generate_qualification_decision",
+]
+
+_AGENT_OPTIONS = ClaudeAgentOptions(
+    system_prompt=SYSTEM_PROMPT,
+    mcp_servers={"loan_tools": _LOAN_TOOLS_SERVER},
+    allowed_tools=_ALLOWED_TOOLS,
+    permission_mode="acceptEdits",
+)
+
+
+# ---------------------------------------------------------------------------
+# Ashr-compatible agent class
+# ---------------------------------------------------------------------------
 
 class LoanAnalysisAgent:
-    """Ashr-compatible loan analysis agent with multimodal document support."""
+    """Ashr-compatible loan analysis agent with multimodal document support.
+
+    Uses ClaudeSDKClient for multi-turn conversation state management and
+    in-process MCP tools for loan analysis operations.
+    """
 
     def __init__(self, model: str = "claude-sonnet-4-20250514"):
-        self.client = anthropic.Anthropic()
-        self.messages: list[dict] = []
         self.model = model
+        self._client: ClaudeSDKClient | None = None
         self._accumulated_tool_calls: list[dict] = []
+        self._loop = asyncio.new_event_loop()
 
     def reset(self):
         """Clear conversation state between scenarios."""
-        self.messages = []
+        # Disconnect and discard the current client so the next respond()
+        # starts a brand-new session with empty context.
+        if self._client is not None:
+            try:
+                self._loop.run_until_complete(self._client.disconnect())
+            except Exception:
+                pass
+            self._client = None
         self._accumulated_tool_calls = []
 
     def respond(self, message: str) -> dict:
         """Process a message and return text + tool_calls.
 
         Detects file paths in the message and loads them as multimodal
-        content blocks. Runs the Claude tool-calling loop until complete.
-        Accumulates tool calls across respond() calls.
+        content blocks. Delegates to the async implementation.
+        Accumulates tool calls across respond() calls within a scenario.
         """
-        # Detect file paths in message
-        file_paths = FILE_PATH_PATTERN.findall(message)
+        return self._loop.run_until_complete(self._async_respond(message))
 
-        # Build content blocks for this message
-        content_blocks: list[dict] = []
+    async def _async_respond(self, message: str) -> dict:
+        """Handle a single user message and execute tools as needed.
 
-        if file_paths:
-            # Add the text portion of the message
-            content_blocks.append({"type": "text", "text": message})
-            # Load each document and append its content blocks
+        Flow:
+        1. Create/reuse client for this scenario
+        2. Detect file paths and build multimodal prompt
+        3. Send query to Claude
+        4. Process response for assistant messages and tool calls
+        5. Return accumulated text and tool calls
+        """
+        try:
+            # Lazily create and connect the client for this scenario
+            if self._client is None:
+                options = ClaudeAgentOptions(
+                    system_prompt=SYSTEM_PROMPT,
+                    mcp_servers={"loan_tools": _LOAN_TOOLS_SERVER},
+                    allowed_tools=_ALLOWED_TOOLS,
+                    permission_mode="acceptEdits",
+                )
+                self._client = ClaudeSDKClient(options=options)
+                await self._client.connect()
+
+            # Detect file paths in message
+            file_paths = FILE_PATH_PATTERN.findall(message)
+
+            # Build prompt: text + multimodal content (if files present)
+            if file_paths:
+                prompt = self._build_multimodal_prompt(message, file_paths)
+            else:
+                prompt = message
+
+            # Send query to Claude (with either string or async iterable)
+            await self._client.query(prompt)
+
+            # Process response stream
+            new_tool_calls: list[dict] = []
+            final_text = ""
+
+            async for msg in self._client.receive_response():
+                if isinstance(msg, AssistantMessage):
+                    # Extract text blocks
+                    for block in msg.content:
+                        if isinstance(block, TextBlock):
+                            final_text = block.text
+                        elif isinstance(block, ToolUseBlock):
+                            # Tool calls come with "mcp__loan_tools__" prefix
+                            tool_name = block.name
+                            # Strip MCP prefix if present
+                            if tool_name.startswith("mcp__loan_tools__"):
+                                tool_name = tool_name.replace("mcp__loan_tools__", "")
+                            new_tool_calls.append({
+                                "name": tool_name,
+                                "arguments": block.input,
+                            })
+                # Other message types (UserMessage, SystemMessage, ResultMessage, StreamEvent)
+                # are processed but we only extract results from AssistantMessage
+
+            self._accumulated_tool_calls.extend(new_tool_calls)
+
+            return {
+                "text": final_text,
+                "tool_calls": list(self._accumulated_tool_calls),
+            }
+
+        except Exception as e:
+            # Log error and return empty response to prevent crashes
+            import traceback
+            error_msg = f"Error processing message: {str(e)}\n{traceback.format_exc()}"
+            print(f"[ERROR] {error_msg}")
+            return {
+                "text": f"An error occurred: {str(e)}",
+                "tool_calls": list(self._accumulated_tool_calls),
+            }
+
+    @staticmethod
+    def _build_multimodal_prompt(message: str, file_paths: list[str]):
+        """Build an async generator for multimodal content (text + documents).
+
+        Yields content dicts in the format expected by ClaudeSDKClient.query():
+        - Text block with the user message
+        - Document blocks (images, tables, etc.) from loaded files
+        """
+        async def _generator():
+            # First, yield the user's text message
+            yield {"type": "text", "text": message}
+            
+            # Then, yield document content blocks
             doc_blocks = load_documents(file_paths)
-            content_blocks.extend(doc_blocks)
-        else:
-            # Plain text message
-            content_blocks = [{"type": "text", "text": message}]
+            for block in doc_blocks:
+                yield block
 
-        self.messages.append({"role": "user", "content": content_blocks})
-
-        new_tool_calls = []
-        final_text = ""
-
-        # Agent loop: keep going until no more tool calls
-        for _ in range(15):
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=4096,
-                system=SYSTEM_PROMPT,
-                tools=TOOL_DEFINITIONS,
-                messages=self.messages,
-            )
-
-            # Collect text and tool use blocks
-            assistant_content = response.content
-            text_parts = []
-            tool_uses = []
-
-            for block in assistant_content:
-                if block.type == "text":
-                    text_parts.append(block.text)
-                elif block.type == "tool_use":
-                    tool_uses.append(block)
-
-            # Append assistant message
-            self.messages.append({"role": "assistant", "content": assistant_content})
-
-            if text_parts:
-                final_text = "\n".join(text_parts)
-
-            if not tool_uses:
-                break
-
-            # Execute tools and add results
-            tool_results = []
-            for tool_use in tool_uses:
-                new_tool_calls.append({
-                    "name": tool_use.name,
-                    "arguments": tool_use.input,
-                })
-                result = execute_tool(tool_use.name, tool_use.input)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tool_use.id,
-                    "content": result,
-                })
-
-            self.messages.append({"role": "user", "content": tool_results})
-
-            if response.stop_reason == "end_turn":
-                break
-
-        self._accumulated_tool_calls.extend(new_tool_calls)
-
-        return {
-            "text": final_text,
-            "tool_calls": list(self._accumulated_tool_calls),
-        }
+        return _generator()
