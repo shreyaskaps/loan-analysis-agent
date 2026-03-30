@@ -1,4 +1,4 @@
-anthropic
+claude-agent-sdk
 ashr-labs
 PyMuPDF
 openpyxl
