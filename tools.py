@@ -2,6 +2,19 @@
 
 TOOL_DEFINITIONS = [
     {
+        "name": "calculate_loan_terms",
+        "description": "Calculate loan payment, total cost, and amortization details based on loan amount, interest rate, and term. Use this tool when the user provides or requests loan calculation parameters.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "loan_amount": {"type": "number", "description": "Loan amount in dollars"},
+                "annual_interest_rate": {"type": "number", "description": "Annual interest rate as a percentage (e.g., 7 for 7%)"},
+                "loan_term_months": {"type": "number", "description": "Loan term in months"},
+            },
+            "required": ["loan_amount", "annual_interest_rate", "loan_term_months"],
+        },
+    },
+    {
         "name": "analyze_income",
         "description": "Analyze and verify income from uploaded pay stubs, W-2s, tax returns, or other income documentation. Call this tool after extracting income details from the user's uploaded documents.",
         "input_schema": {
@@ -26,6 +39,8 @@ TOOL_DEFINITIONS = [
                 "num_months": {"type": "number", "description": "Number of months of statements provided"},
                 "overdrafts": {"type": "number", "description": "Number of overdrafts in the statement period"},
                 "large_deposits": {
+                    "type": ["number", "array"],
+                    "items": {"type": "number"},
                     "description": "Large or unusual deposits. Single number or array of amounts. Use 0 if none.",
                 },
                 "monthly_deposits": {"type": "number", "description": "Average monthly deposit amount"},
@@ -43,8 +58,8 @@ TOOL_DEFINITIONS = [
             "properties": {
                 "credit_score": {"type": "number", "description": "Credit score (FICO or Vantage equivalent)"},
                 "open_accounts": {"type": "number", "description": "Number of open credit accounts"},
-                "derogatory_marks": {"description": "Number of derogatory marks or 'none'"},
-                "credit_utilization": {"description": "Credit utilization as decimal (0.18) or percentage (18)"},
+                "derogatory_marks": {"type": ["number", "string"], "description": "Number of derogatory marks or 'none'"},
+                "credit_utilization": {"type": "number", "description": "Credit utilization as decimal (0.18) or percentage (18)"},
                 "credit_history_years": {"type": "number", "description": "Length of credit history in years"},
             },
             "required": ["credit_score", "open_accounts", "derogatory_marks", "credit_utilization", "credit_history_years"],
@@ -86,7 +101,29 @@ TOOL_DEFINITIONS = [
 
 def execute_tool(name: str, arguments: dict) -> str:
     """Execute a tool and return a result string."""
-    if name == "analyze_income":
+    if name == "calculate_loan_terms":
+        loan_amount = arguments.get("loan_amount", 0)
+        annual_rate = arguments.get("annual_interest_rate", 0)
+        term_months = arguments.get("loan_term_months", 0)
+        
+        # Calculate monthly payment using standard amortization formula
+        monthly_rate = annual_rate / 100 / 12
+        if monthly_rate == 0:
+            monthly_payment = loan_amount / term_months if term_months > 0 else 0
+        else:
+            monthly_payment = loan_amount * (monthly_rate * (1 + monthly_rate) ** term_months) / ((1 + monthly_rate) ** term_months - 1)
+        
+        total_paid = monthly_payment * term_months
+        total_interest = total_paid - loan_amount
+        
+        return (
+            f"Loan calculation complete. Loan amount: ${loan_amount:,.2f}. "
+            f"Annual interest rate: {annual_rate}%. Loan term: {term_months} months ({term_months / 12:.1f} years). "
+            f"Monthly payment: ${monthly_payment:,.2f}. Total amount paid: ${total_paid:,.2f}. "
+            f"Total interest: ${total_interest:,.2f}."
+        )
+    
+    elif name == "analyze_income":
         monthly = arguments.get("monthly_gross", 0)
         annual = arguments.get("annual_income", 0)
         employer = arguments.get("employer", "Unknown")
