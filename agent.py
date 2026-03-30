@@ -5,22 +5,25 @@ by converting them to Claude Vision content blocks. Compatible with
 the Ashr SDK's respond()/reset() interface for evaluation.
 """
 
+import asyncio
 import os
 import re
-import anthropic
-from tools import TOOL_DEFINITIONS, execute_tool
+import threading
+from typing import Any
+
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    ResultMessage,
+    TextBlock,
+    ToolUseBlock,
+)
+
 from document_loader import load_documents
+from tools import build_loan_mcp_server
 
-SYSTEM_PROMPT = """Looking at the failure pattern, the issue is that `calculate_loan_terms` is never being called — the agent is either asking for uploads when text data is present, or using the wrong tool. The fix needs to:
-
-1. Add `calculate_loan_terms` to the Tool Selection Guide so the agent knows when to use it
-2. Clarify that text data is sufficient to trigger this tool (no upload required)
-
-The most appropriate place is in the workflow section (step 2) where other tools are mapped to document types, and in the argument formatting section.
-
----
-
-You are a loan analysis agent that processes financial documents — including PDFs, scanned pages, handwritten notes, images, and spreadsheets — to determine loan pre-qualification.
+SYSTEM_PROMPT = """You are a loan analysis agent that processes financial documents — including PDFs, scanned pages, handwritten notes, images, and spreadsheets — to determine loan pre-qualification.
 
 ## CRITICAL: Always analyze and call tools
 
@@ -29,18 +32,16 @@ When a user provides financial information — whether as uploaded documents (im
 ## Tool Selection Guide
 
 Before calling any tool, match the user's request to the right tool:
-- `calculate_loan_terms`: Use when the user provides loan parameters (loan amount, interest rate, and/or loan term/duration) and wants to know payment amounts, total cost, or loan structure. Use this tool even if the data is provided as plain text — do NOT ask for a file upload. Do NOT use `analyze_income` or `calculate_dti` as a substitute for this.
-- `analyze_income`: Use ONLY when processing income documents (pay stubs, W-2s, 1099s, tax returns). Do NOT use for loan term/payment calculations.
-- `calculate_dti`: Use ONLY when computing debt-to-income ratio from known monthly debts, income, and proposed payment. Do NOT use as a substitute for `calculate_loan_terms`.
-- `generate_qualification_decision`: Use ONLY after `calculate_dti` to produce a final pre-qualification decision.
-
-If the user provides loan amount, rate, or term data and asks about payments or loan structure, prefer `calculate_loan_terms` unless the user explicitly asks for a DTI or qualification decision.
+- `analyze_income`: Use ONLY when processing income documents (pay stubs, W-2s, 1099s, tax returns). Requires: employer, income_type, annual_income, monthly_gross, years_employed, additional_income.
+- `analyze_bank_statements`: Use when analyzing bank statements for cash flow health, overdrafts, reserves, and deposit patterns. Requires: num_months, overdrafts, large_deposits, monthly_deposits, monthly_withdrawals, average_monthly_balance.
+- `check_credit_profile`: Use when evaluating credit reports. Requires: credit_score, open_accounts, derogatory_marks, credit_utilization, credit_history_years.
+- `calculate_dti`: Use when computing debt-to-income ratio from known monthly debts, income, and proposed payment. Requires: monthly_debts, monthly_gross_income, proposed_loan_payment.
+- `generate_qualification_decision`: Use ONLY after `calculate_dti` to produce a final pre-qualification decision. Requires: dti_ratio, loan_type, collateral, loan_amount, credit_score, annual_income, employment_years, down_payment_percent.
 
 ## Your workflow
 
 1. **Read all provided information**: The user may provide financial data as images, text descriptions, pasted document content, or structured data. Extract all relevant numbers from whatever format is provided.
 2. **Analyze each document type using the appropriate tool**:
-   - Loan parameters (amount, rate, term) → call `calculate_loan_terms` with extracted numbers
    - Pay stubs / W-2s / tax returns → call `analyze_income` with extracted numbers
    - Bank statements → call `analyze_bank_statements` with extracted numbers
    - Credit reports → call `check_credit_profile` with extracted numbers
@@ -52,7 +53,7 @@ IMPORTANT: You MUST ALWAYS call generate_qualification_decision after calculate_
 IMPORTANT: If the user provides ALL the needed financial data in their message, call ALL tools in sequence without asking follow-up questions.
 
 IMPORTANT: Do NOT call a tool if you are missing REQUIRED fields for it. Each tool requires ALL its required fields to have real values from the user/documents — not guesses or zeros. Specifically:
-- Do NOT call `check_credit_profile` until you have real values for ALL of: credit_score, open_accounts, credit_utilization, credit_history_years. If the user only gave you a credit score but not the others, ASK for the missing fields before calling the tool.
+- Do NOT call `check_credit_profile` until you have real values for ALL of: credit_score, open_accounts, derogatory_marks, credit_utilization, credit_history_years. If the user only gave you a credit score but not the others, ASK for the missing fields before calling the tool.
 - Do NOT call `calculate_dti` until you know the exact monthly debts, monthly gross income, and proposed loan payment.
 - If the user provides partial information, respond asking for the specific missing fields. Then call the tools once you have everything.
 
@@ -73,47 +74,44 @@ IMPORTANT: `open_accounts` means the TOTAL count the user states. If user says "
 
 You MUST follow these rules exactly for each tool. Extract values VERBATIM from the documents.
 
-### calculate_loan_terms
-- Use when the user provides loan amount, interest rate, and/or loan term and wants payment or cost information.
-- Do NOT require a file upload — text data (e.g., "I want a $15,000 loan at 7% for 48 months") is sufficient to call this tool immediately.
-- Extract `loan_amount`, `annual_interest_rate`, and `loan_term_months` (or equivalent fields) directly from the user's message.
-
 ### analyze_income
-- `employer`: Use EXACT employer name from document. For retired/SSA income, use "N/A (retired)".
-- `income_type`: Use the EXACT type stated in the document. Common values: "W2", "W-2", "1099", "1099 contractor", "W-2 + 1099", "W-2 + 1099 + rental", "self_employed", "fixed", "salary". Copy the exact string from the document.
-- `annual_income`: Exact annual figure from doc.
-- `monthly_gross`: Exact monthly gross from doc. If only pay period given, multiply correctly (biweekly x 26 / 12).
-- `years_employed`: Exact years from doc. For retired, use career length if stated.
-- `additional_income`: Exact additional income or 0.
+- `employer`: Use EXACT employer name from document. For retired/SSA income, use "N/A (retired)". Type: string. Example: "Acme Marketing LLC"
+- `income_type`: Use the EXACT type stated in the document. Common values: "W2", "W-2", "1099", "1099 contractor", "W-2 + 1099", "W-2 + 1099 + rental", "self_employed", "fixed", "salary". Type: string. Copy the exact string from the document.
+- `annual_income`: Exact annual figure from doc. Type: number. Example: 48000
+- `monthly_gross`: Exact monthly gross from doc. If only pay period given, multiply correctly (biweekly x 26 / 12). Type: number. Example: 4000
+- `years_employed`: Exact years from doc. Type: number. For retired, use career length if stated. Example: 3
+- `additional_income`: Exact additional income or 0. Type: number. Example: 0 or 500
 
 ### analyze_bank_statements
-- `num_months`: Number of statement months.
-- `overdrafts`: Number of overdrafts (use 0 for none, NOT false).
-- `large_deposits`: If document lists specific amounts, pass as a number (single deposit) or array (multiple deposits like [8000, 3200]). If none, use 0. IMPORTANT: Match the document format.
-- `monthly_deposits`, `monthly_withdrawals`, `average_monthly_balance`: Exact values from doc.
+- `num_months`: Number of statement months. Type: number. Example: 3 or 6
+- `overdrafts`: Number of overdrafts (use 0 for none, NOT false). Type: number. Example: 0 or 2
+- `large_deposits`: If document lists specific amounts, pass as a number (single deposit) or array (multiple deposits like [8000, 3200]). If none, use 0. Type: number or array. IMPORTANT: Match the document format. Example: 0 or 5000 or [8000, 3200]
+- `monthly_deposits`: Average monthly deposit amount. Type: number. Example: 5200
+- `monthly_withdrawals`: Average monthly withdrawal amount. Type: number. Example: 4800
+- `average_monthly_balance`: Average monthly account balance. Type: number. Example: 12000
 
 ### check_credit_profile
-- `credit_score`: Exact score.
-- `open_accounts`: Exact count.
-- `derogatory_marks`: Use EXACTLY what the document says. "none" if doc says none, 0 if doc says 0, or the exact description.
-- `credit_utilization`: Use EXACTLY as stated. If doc says "12%", use 12. If doc says "0.18", use 0.18.
-- `credit_history_years`: Exact years.
+- `credit_score`: Exact score. Type: number. Example: 720
+- `open_accounts`: Exact count. Type: number. Example: 6
+- `derogatory_marks`: Use EXACTLY what the document says. "none" if doc says none, 0 if doc says 0, or the exact description. Type: string or number. Example: "none" or 0 or "1 late payment 2019"
+- `credit_utilization`: Use EXACTLY as stated. If doc says "12%", use 12. If doc says "0.18", use 0.18. Type: number. Example: 12 or 0.18 or 35
+- `credit_history_years`: Exact years. Type: number. Example: 8
 
 ### calculate_dti
-- `monthly_debts`: Total existing monthly debt obligations (add up all listed debts).
-- `monthly_gross_income`: Monthly gross income from income analysis.
-- `proposed_loan_payment`: The proposed/estimated monthly payment for the new loan.
-- DTI = (monthly_debts + proposed_loan_payment) / monthly_gross_income
+- `monthly_debts`: Total existing monthly debt obligations (add up all listed debts). Type: number. Example: 1200 (credit cards $300 + car $400 + student $500)
+- `monthly_gross_income`: Monthly gross income from income analysis. Type: number. Example: 4500
+- `proposed_loan_payment`: The proposed/estimated monthly payment for the new loan. Type: number. Example: 450
+- DTI = (monthly_debts + proposed_loan_payment) / monthly_gross_income. Example: (1200 + 450) / 4500 = 0.3667
 
 ### generate_qualification_decision
-- `dti_ratio`: Use the calculated DTI as a decimal (e.g. 0.247). Calculate precisely.
-- `loan_type`: Use snake_case format matching the application type: "personal_loan", "auto", "HELOC", "30-year fixed", "debt_consolidation", "working_capital", etc.
-- `collateral`: Use "unsecured" or "none" for unsecured loans. For secured loans, describe the collateral (e.g., "vehicle", property address).
-- `loan_amount`: The ORIGINAL requested loan amount (before down payment).
-- `credit_score`: From credit report.
-- `annual_income`: From income analysis.
-- `employment_years`: From income analysis.
-- `down_payment_percent`: As percentage. 0 if none.
+- `dti_ratio`: Use the calculated DTI as a decimal (e.g. 0.247). Calculate precisely. Type: number. Example: 0.247
+- `loan_type`: Use snake_case format matching the application type: "personal_loan", "auto", "HELOC", "30-year fixed", "debt_consolidation", "working_capital", etc. Type: string. Example: "personal_loan"
+- `collateral`: Use "unsecured" or "none" for unsecured loans. For secured loans, describe the collateral (e.g., "vehicle", property address). Type: string. Example: "unsecured" or "vehicle" or "house - 123 Main St"
+- `loan_amount`: The ORIGINAL requested loan amount (before down payment). Type: number. Example: 15000
+- `credit_score`: From credit report. Type: number. Example: 720
+- `annual_income`: From income analysis. Type: number. Example: 54000
+- `employment_years`: From income analysis. Type: number. Example: 3
+- `down_payment_percent`: As percentage (0-100). 0 if none. Type: number. Example: 0 or 10 or 20
 
 ## CRITICAL: Multiple income sources and co-borrowers
 
@@ -169,99 +167,142 @@ FILE_PATH_PATTERN = re.compile(
 
 
 class LoanAnalysisAgent:
-    """Ashr-compatible loan analysis agent with multimodal document support."""
+    """Ashr-compatible loan analysis agent built on the Claude Agent SDK.
 
-    def __init__(self, model: str = "claude-sonnet-4-20250514"):
-        self.client = anthropic.Anthropic()
-        self.messages: list[dict] = []
+    Preserves the synchronous respond()/reset() interface expected by the
+    Ashr eval runner, bridging to the async ClaudeSDKClient internally.
+    """
+
+    def __init__(self, model: str = "claude-sonnet-4-5-20250929"):
         self.model = model
         self._accumulated_tool_calls: list[dict] = []
+        # Build MCP server and tool name list once; reuse across turns
+        self._mcp_server, self._mcp_tool_names = build_loan_mcp_server()
+        self._options = self._build_options()
+        # The async client is created lazily and persists for the scenario
+        self._client: ClaudeSDKClient | None = None
 
-    def reset(self):
-        """Clear conversation state between scenarios."""
-        self.messages = []
-        self._accumulated_tool_calls = []
+    # ── Option construction ────────────────────────────────────────────────
 
-    def respond(self, message: str) -> dict:
-        """Process a message and return text + tool_calls.
+    def _build_options(self) -> ClaudeAgentOptions:
+        return ClaudeAgentOptions(
+            model=self.model,
+            system_prompt=SYSTEM_PROMPT,
+            mcp_servers={"loan_tools": self._mcp_server},
+            # Pre-approve all custom loan tools; disable built-ins we don't need
+            allowed_tools=self._mcp_tool_names,
+            disallowed_tools=[
+                "Bash", "Read", "Write", "Edit", "MultiEdit",
+                "Glob", "Grep", "LS", "WebSearch", "WebFetch",
+                "TodoRead", "TodoWrite", "NotebookRead", "NotebookEdit",
+            ],
+            permission_mode="bypassPermissions",
+        )
 
-        Detects file paths in the message and loads them as multimodal
-        content blocks. Runs the Claude tool-calling loop until complete.
-        Accumulates tool calls across respond() calls.
-        """
-        # Detect file paths in message
-        file_paths = FILE_PATH_PATTERN.findall(message)
+    # ── Async helpers ──────────────────────────────────────────────────────
 
-        # Build content blocks for this message
-        content_blocks: list[dict] = []
+    async def _ensure_client(self) -> ClaudeSDKClient:
+        """Return the open ClaudeSDKClient, creating it if needed."""
+        if self._client is None:
+            self._client = ClaudeSDKClient(options=self._options)
+            await self._client.connect()
+        return self._client
 
-        if file_paths:
-            # Add the text portion of the message
-            content_blocks.append({"type": "text", "text": message})
-            # Load each document and append its content blocks
-            doc_blocks = load_documents(file_paths)
-            content_blocks.extend(doc_blocks)
-        else:
-            # Plain text message
-            content_blocks = [{"type": "text", "text": message}]
+    async def _async_reset(self) -> None:
+        """Disconnect and drop the client so the next call starts fresh."""
+        if self._client is not None:
+            try:
+                await self._client.disconnect()
+            except Exception:
+                pass
+            self._client = None
 
-        self.messages.append({"role": "user", "content": content_blocks})
+    async def _async_respond(self, prompt: str) -> dict:
+        """Send one prompt turn and collect text + tool calls from the stream."""
+        client = await self._ensure_client()
+        await client.query(prompt)
 
-        new_tool_calls = []
-        final_text = ""
+        text_parts: list[str] = []
+        new_tool_calls: list[dict] = []
 
-        # Agent loop: keep going until no more tool calls
-        for _ in range(15):
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=4096,
-                system=SYSTEM_PROMPT,
-                tools=TOOL_DEFINITIONS,
-                messages=self.messages,
-            )
-
-            # Collect text and tool use blocks
-            assistant_content = response.content
-            text_parts = []
-            tool_uses = []
-
-            for block in assistant_content:
-                if block.type == "text":
-                    text_parts.append(block.text)
-                elif block.type == "tool_use":
-                    tool_uses.append(block)
-
-            # Append assistant message
-            self.messages.append({"role": "assistant", "content": assistant_content})
-
-            if text_parts:
-                final_text = "\n".join(text_parts)
-
-            if not tool_uses:
-                break
-
-            # Execute tools and add results
-            tool_results = []
-            for tool_use in tool_uses:
-                new_tool_calls.append({
-                    "name": tool_use.name,
-                    "arguments": tool_use.input,
-                })
-                result = execute_tool(tool_use.name, tool_use.input)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tool_use.id,
-                    "content": result,
-                })
-
-            self.messages.append({"role": "user", "content": tool_results})
-
-            if response.stop_reason == "end_turn":
+        async for message in client.receive_response():
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        text_parts.append(block.text)
+                    elif isinstance(block, ToolUseBlock):
+                        # Strip the "mcp__loan_tools__" prefix so the Ashr
+                        # comparator sees the plain tool name (e.g. "analyze_income")
+                        raw_name: str = block.name
+                        short_name = raw_name.replace("mcp__loan_tools__", "")
+                        new_tool_calls.append({
+                            "name": short_name,
+                            "arguments": block.input if block.input else {},
+                        })
+            elif isinstance(message, ResultMessage):
+                # ResultMessage signals end-of-turn; subtype "success" is normal
                 break
 
         self._accumulated_tool_calls.extend(new_tool_calls)
-
         return {
-            "text": final_text,
+            "text": "\n".join(text_parts),
             "tool_calls": list(self._accumulated_tool_calls),
         }
+
+    # ── Sync→async bridge ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _run_async(coro) -> Any:
+        """Run an async coroutine from a synchronous context.
+
+        Uses a dedicated thread with its own event loop to avoid conflicts
+        with any existing event loop in the caller's thread.
+        """
+        result_box: list[Any] = []
+        exc_box: list[BaseException] = []
+
+        def _target():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result_box.append(loop.run_until_complete(coro))
+            except BaseException as exc:  # noqa: BLE001
+                exc_box.append(exc)
+            finally:
+                loop.close()
+
+        t = threading.Thread(target=_target, daemon=True)
+        t.start()
+        t.join()
+
+        if exc_box:
+            raise exc_box[0]
+        return result_box[0]
+
+    # ── Public Ashr interface ──────────────────────────────────────────────
+
+    def reset(self) -> None:
+        """Clear conversation state between evaluation scenarios."""
+        self._run_async(self._async_reset())
+        self._accumulated_tool_calls = []
+
+    def respond(self, message: str) -> dict:
+        """Process a user message and return text + accumulated tool_calls.
+
+        File paths detected in the message are loaded via document_loader
+        and their text content is appended inline to the prompt, since the
+        Agent SDK handles its own Claude inference internally.
+        """
+        # Detect and inline any file-based documents
+        file_paths = FILE_PATH_PATTERN.findall(message)
+        if file_paths:
+            doc_blocks = load_documents(file_paths)
+            # Collect text content from document blocks and append to prompt
+            doc_texts: list[str] = []
+            for block in doc_blocks:
+                if block.get("type") == "text":
+                    doc_texts.append(block.get("text", ""))
+            if doc_texts:
+                message = message + "\n\n[Document contents]\n" + "\n\n".join(doc_texts)
+
+        return self._run_async(self._async_respond(message))
