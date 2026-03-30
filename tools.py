@@ -26,7 +26,11 @@ TOOL_DEFINITIONS = [
                 "num_months": {"type": "number", "description": "Number of months of statements provided"},
                 "overdrafts": {"type": "number", "description": "Number of overdrafts in the statement period"},
                 "large_deposits": {
-                    "description": "Large or unusual deposits. Single number or array of amounts. Use 0 if none.",
+                    "description": "Large or unusual deposits. Pass a single number (e.g. 5000), an array of amounts (e.g. [8000, 3200]), or 0 if none.",
+                    "oneOf": [
+                        {"type": "number"},
+                        {"type": "array", "items": {"type": "number"}, "minItems": 1},
+                    ],
                 },
                 "monthly_deposits": {"type": "number", "description": "Average monthly deposit amount"},
                 "monthly_withdrawals": {"type": "number", "description": "Average monthly withdrawal amount"},
@@ -43,8 +47,17 @@ TOOL_DEFINITIONS = [
             "properties": {
                 "credit_score": {"type": "number", "description": "Credit score (FICO or Vantage equivalent)"},
                 "open_accounts": {"type": "number", "description": "Number of open credit accounts"},
-                "derogatory_marks": {"description": "Number of derogatory marks or 'none'"},
-                "credit_utilization": {"description": "Credit utilization as decimal (0.18) or percentage (18)"},
+                "derogatory_marks": {
+                    "description": "Number of derogatory marks (e.g. 0, 1, 2) or the string 'none'.",
+                    "oneOf": [
+                        {"type": "number"},
+                        {"type": "string"},
+                    ],
+                },
+                "credit_utilization": {
+                    "type": "number",
+                    "description": "Credit utilization as decimal (0.18) or percentage (18%). Extract exactly as stated in the document — do not normalize.",
+                },
                 "credit_history_years": {"type": "number", "description": "Length of credit history in years"},
             },
             "required": ["credit_score", "open_accounts", "derogatory_marks", "credit_utilization", "credit_history_years"],
@@ -79,6 +92,28 @@ TOOL_DEFINITIONS = [
                 "down_payment_percent": {"type": "number", "description": "Down payment as percentage (0 if none)"},
             },
             "required": ["dti_ratio", "loan_type", "collateral", "loan_amount", "credit_score", "annual_income", "employment_years", "down_payment_percent"],
+        },
+    },
+    {
+        "name": "calculate_loan_terms",
+        "description": "Calculate loan payment schedule given a loan amount, annual interest rate, and term. Call this when the user provides loan parameters and wants to know monthly payment, total interest, or full loan structure.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "loan_amount": {
+                    "type": "number",
+                    "description": "Principal loan amount in dollars. Must be greater than 0.",
+                },
+                "annual_interest_rate": {
+                    "type": "number",
+                    "description": "Annual interest rate as a percentage (e.g. 7.5 for 7.5%) or decimal (e.g. 0.075). Extract exactly as stated in the document.",
+                },
+                "loan_term_months": {
+                    "type": "number",
+                    "description": "Loan term in months (e.g. 60 for 5 years). Must be greater than 0.",
+                },
+            },
+            "required": ["loan_amount", "annual_interest_rate", "loan_term_months"],
         },
     },
 ]
@@ -161,6 +196,36 @@ def execute_tool(name: str, arguments: dict) -> str:
             f"Credit score: {score}. DTI: {dti:.1%}. "
             f"Annual income: ${income:,.0f}. Employment: {years} years. "
             f"Collateral: {collateral}. Down payment: {down}%. "
+        )
+
+    elif name == "calculate_loan_terms":
+        principal = arguments.get("loan_amount", 0)
+        rate = arguments.get("annual_interest_rate", 0)
+        term = int(arguments.get("loan_term_months", 0))
+        
+        # Validate inputs
+        if principal <= 0:
+            return "Error: loan_amount must be greater than 0."
+        if term <= 0:
+            return "Error: loan_term_months must be greater than 0."
+        
+        # Normalize rate: if given as percentage (e.g. 7.5), convert to decimal
+        if rate > 1:
+            rate = rate / 100
+        monthly_rate = rate / 12
+        if monthly_rate > 0 and term > 0:
+            monthly_payment = principal * (monthly_rate * (1 + monthly_rate) ** term) / ((1 + monthly_rate) ** term - 1)
+        elif term > 0:
+            monthly_payment = principal / term
+        else:
+            monthly_payment = 0
+        total_paid = monthly_payment * term
+        total_interest = total_paid - principal
+        return (
+            f"Loan term calculation complete. Principal: ${principal:,.2f}. "
+            f"Annual rate: {rate * 100:.2f}%. Term: {term} months. "
+            f"Monthly payment: ${monthly_payment:,.2f}. "
+            f"Total paid: ${total_paid:,.2f}. Total interest: ${total_interest:,.2f}."
         )
 
     return f"Unknown tool: {name}"

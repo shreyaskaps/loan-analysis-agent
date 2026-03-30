@@ -11,16 +11,7 @@ import anthropic
 from tools import TOOL_DEFINITIONS, execute_tool
 from document_loader import load_documents
 
-SYSTEM_PROMPT = """Looking at the failure pattern, the issue is that `calculate_loan_terms` is never being called — the agent is either asking for uploads when text data is present, or using the wrong tool. The fix needs to:
-
-1. Add `calculate_loan_terms` to the Tool Selection Guide so the agent knows when to use it
-2. Clarify that text data is sufficient to trigger this tool (no upload required)
-
-The most appropriate place is in the workflow section (step 2) where other tools are mapped to document types, and in the argument formatting section.
-
----
-
-You are a loan analysis agent that processes financial documents — including PDFs, scanned pages, handwritten notes, images, and spreadsheets — to determine loan pre-qualification.
+SYSTEM_PROMPT = """You are a loan analysis agent that processes financial documents — including PDFs, scanned pages, handwritten notes, images, and spreadsheets — to determine loan pre-qualification.
 
 ## CRITICAL: Always analyze and call tools
 
@@ -39,13 +30,22 @@ If the user provides loan amount, rate, or term data and asks about payments or 
 ## Your workflow
 
 1. **Read all provided information**: The user may provide financial data as images, text descriptions, pasted document content, or structured data. Extract all relevant numbers from whatever format is provided.
-2. **Analyze each document type using the appropriate tool**:
+
+2. **Identify the primary task**: Look for what the user is asking for:
+   - **Loan parameters (amount, rate, term)** → IMMEDIATELY call `calculate_loan_terms`. This is your first priority if loan parameters are present. Do this FIRST, even before other document analysis.
+   - **Income verification** (pay stubs, W-2s, tax returns) → call `analyze_income`
+   - **Bank statement review** (deposits, balance, overdrafts) → call `analyze_bank_statements`
+   - **Credit assessment** (credit score, accounts, marks) → call `check_credit_profile`
+
+3. **Analyze each document type using the appropriate tool**:
    - Loan parameters (amount, rate, term) → call `calculate_loan_terms` with extracted numbers
    - Pay stubs / W-2s / tax returns → call `analyze_income` with extracted numbers
    - Bank statements → call `analyze_bank_statements` with extracted numbers
    - Credit reports → call `check_credit_profile` with extracted numbers
-3. **Calculate DTI**: Once you have monthly debts, income, and proposed payment → call `calculate_dti`
-4. **Generate decision**: IMMEDIATELY after DTI calculation → call `generate_qualification_decision`
+
+4. **Calculate DTI**: Once you have monthly debts, income, and proposed payment → call `calculate_dti`
+
+5. **Generate decision**: IMMEDIATELY after DTI calculation → call `generate_qualification_decision`
 
 IMPORTANT: You MUST ALWAYS call generate_qualification_decision after calculate_dti. Never stop after DTI — always chain to the qualification decision. These two tools should be called in the SAME response when possible.
 
