@@ -2,6 +2,19 @@
 
 TOOL_DEFINITIONS = [
     {
+        "name": "calculate_loan_terms",
+        "description": "Calculate loan payment amount, total interest, and total cost based on loan parameters. Call this when user provides loan amount, interest rate, and loan term.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "loan_amount": {"type": "number", "description": "Principal loan amount in dollars"},
+                "annual_interest_rate": {"type": "number", "description": "Annual interest rate as percentage (e.g., 7 for 7%)"},
+                "loan_term_months": {"type": "number", "description": "Loan term in months"},
+            },
+            "required": ["loan_amount", "annual_interest_rate", "loan_term_months"],
+        },
+    },
+    {
         "name": "analyze_income",
         "description": "Analyze and verify income from uploaded pay stubs, W-2s, tax returns, or other income documentation. Call this tool after extracting income details from the user's uploaded documents.",
         "input_schema": {
@@ -26,7 +39,12 @@ TOOL_DEFINITIONS = [
                 "num_months": {"type": "number", "description": "Number of months of statements provided"},
                 "overdrafts": {"type": "number", "description": "Number of overdrafts in the statement period"},
                 "large_deposits": {
-                    "description": "Large or unusual deposits. Single number or array of amounts. Use 0 if none.",
+                    "oneOf": [
+                        {"type": "number"},
+                        {"type": "array", "items": {"type": "number"}},
+                        {"type": "integer", "const": 0}
+                    ],
+                    "description": "Large or unusual deposits. Single number, array of amounts, or 0 if none."
                 },
                 "monthly_deposits": {"type": "number", "description": "Average monthly deposit amount"},
                 "monthly_withdrawals": {"type": "number", "description": "Average monthly withdrawal amount"},
@@ -43,8 +61,14 @@ TOOL_DEFINITIONS = [
             "properties": {
                 "credit_score": {"type": "number", "description": "Credit score (FICO or Vantage equivalent)"},
                 "open_accounts": {"type": "number", "description": "Number of open credit accounts"},
-                "derogatory_marks": {"description": "Number of derogatory marks or 'none'"},
-                "credit_utilization": {"description": "Credit utilization as decimal (0.18) or percentage (18)"},
+                "derogatory_marks": {
+                    "oneOf": [
+                        {"type": "string", "enum": ["none"]},
+                        {"type": "number"}
+                    ],
+                    "description": "Number of derogatory marks (0 or positive integer), or the string 'none'"
+                },
+                "credit_utilization": {"type": "number", "description": "Credit utilization as decimal (0.18) or percentage (18)"},
                 "credit_history_years": {"type": "number", "description": "Length of credit history in years"},
             },
             "required": ["credit_score", "open_accounts", "derogatory_marks", "credit_utilization", "credit_history_years"],
@@ -86,7 +110,41 @@ TOOL_DEFINITIONS = [
 
 def execute_tool(name: str, arguments: dict) -> str:
     """Execute a tool and return a result string."""
-    if name == "analyze_income":
+    if name == "calculate_loan_terms":
+        loan_amount = arguments.get("loan_amount", 0)
+        annual_rate = arguments.get("annual_interest_rate", 0)
+        term_months = arguments.get("loan_term_months", 0)
+        
+        # Input validation
+        if loan_amount <= 0:
+            return "Error: loan_amount must be greater than 0."
+        if term_months <= 0:
+            return "Error: loan_term_months must be greater than 0."
+        if annual_rate < 0:
+            return "Error: annual_interest_rate cannot be negative."
+        if annual_rate > 100:
+            return "Error: annual_interest_rate seems unreasonably high (>100%). Please verify."
+        
+        # Calculate monthly payment using standard amortization formula
+        monthly_rate = annual_rate / 100 / 12
+        if monthly_rate == 0:
+            # If 0% interest, simple division
+            monthly_payment = loan_amount / term_months
+        else:
+            # Standard amortization formula
+            monthly_payment = loan_amount * (monthly_rate * (1 + monthly_rate) ** term_months) / ((1 + monthly_rate) ** term_months - 1)
+        
+        total_paid = monthly_payment * term_months
+        total_interest = total_paid - loan_amount
+        
+        return (
+            f"Loan terms calculated. Loan amount: ${loan_amount:,.2f}. "
+            f"Annual interest rate: {annual_rate}%. Loan term: {term_months} months. "
+            f"Monthly payment: ${monthly_payment:,.2f}. Total interest: ${total_interest:,.2f}. "
+            f"Total amount to be paid: ${total_paid:,.2f}."
+        )
+
+    elif name == "analyze_income":
         monthly = arguments.get("monthly_gross", 0)
         annual = arguments.get("annual_income", 0)
         employer = arguments.get("employer", "Unknown")
@@ -108,12 +166,21 @@ def execute_tool(name: str, arguments: dict) -> str:
         withdrawals = arguments.get("monthly_withdrawals", 0)
         overdrafts = arguments.get("overdrafts", 0)
         large = arguments.get("large_deposits", 0)
+        
+        # Handle large_deposits as single number, array, or 0
+        if isinstance(large, list):
+            large_deposits_str = f"{len(large)} large deposits totaling ${sum(large):,.0f}"
+        elif isinstance(large, (int, float)) and large > 0:
+            large_deposits_str = f"${large:,.0f}"
+        else:
+            large_deposits_str = "None"
+        
         overdraft_note = "No overdrafts detected." if overdrafts == 0 else f"{overdrafts} overdraft(s) detected in the period."
         return (
             f"Bank statement analysis complete ({months} months). "
             f"Average monthly balance: ${balance:,.0f}. "
             f"Monthly deposits: ${deposits:,.0f}. Monthly withdrawals: ${withdrawals:,.0f}. "
-            f"{overdraft_note} Large deposits: {large}. "
+            f"{overdraft_note} Large deposits: {large_deposits_str}. "
             f"Cash flow appears {'stable' if overdrafts == 0 else 'somewhat irregular'}."
         )
 
@@ -123,10 +190,19 @@ def execute_tool(name: str, arguments: dict) -> str:
         derog = arguments.get("derogatory_marks", 0)
         util = arguments.get("credit_utilization", 0)
         history = arguments.get("credit_history_years", 0)
+        
+        # Handle derogatory_marks as string "none" or numeric value
+        if isinstance(derog, str) and derog.lower() == "none":
+            derog_str = "None"
+        elif isinstance(derog, (int, float)):
+            derog_str = str(int(derog)) if isinstance(derog, float) and derog == int(derog) else str(derog)
+        else:
+            derog_str = str(derog)
+        
         rating = "excellent" if score >= 750 else "good" if score >= 700 else "fair" if score >= 650 else "below average"
         return (
             f"Credit profile check complete. Score: {score} ({rating}). "
-            f"Open accounts: {accounts}. Derogatory marks: {derog}. "
+            f"Open accounts: {accounts}. Derogatory marks: {derog_str}. "
             f"Credit utilization: {util}. Credit history: {history} years. "
         )
 
