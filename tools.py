@@ -81,6 +81,19 @@ TOOL_DEFINITIONS = [
             "required": ["dti_ratio", "loan_type", "collateral", "loan_amount", "credit_score", "annual_income", "employment_years", "down_payment_percent"],
         },
     },
+    {
+        "name": "calculate_loan_terms",
+        "description": "Calculate monthly payment and total loan cost using the standard amortization formula. Call this when the user provides loan amount, annual interest rate, and loan term in months and wants to know payment amounts or total cost.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "loan_amount": {"type": "number", "description": "Principal loan amount in dollars"},
+                "annual_interest_rate": {"type": "number", "description": "Annual interest rate as a percentage (e.g. 7.5 for 7.5%)"},
+                "loan_term_months": {"type": "number", "description": "Loan term in months (e.g. 60 for a 5-year loan)"},
+            },
+            "required": ["loan_amount", "annual_interest_rate", "loan_term_months"],
+        },
+    },
 ]
 
 
@@ -161,6 +174,37 @@ def execute_tool(name: str, arguments: dict) -> str:
             f"Credit score: {score}. DTI: {dti:.1%}. "
             f"Annual income: ${income:,.0f}. Employment: {years} years. "
             f"Collateral: {collateral}. Down payment: {down}%. "
+        )
+
+    elif name == "calculate_loan_terms":
+        principal = float(arguments.get("loan_amount", 0))
+        annual_rate = float(arguments.get("annual_interest_rate", 0))
+        n = int(arguments.get("loan_term_months", 0))
+        monthly_rate = annual_rate / 100 / 12
+
+        if n <= 0:
+            return "Error: loan_term_months must be greater than 0."
+        if principal <= 0:
+            return "Error: loan_amount must be greater than 0."
+
+        if monthly_rate == 0:
+            # Zero-interest loan: equal principal payments
+            monthly_payment = principal / n
+        else:
+            # Standard amortization formula: M = P * [r(1+r)^n] / [(1+r)^n - 1]
+            factor = (1 + monthly_rate) ** n
+            monthly_payment = principal * (monthly_rate * factor) / (factor - 1)
+
+        total_paid = monthly_payment * n
+        total_interest = total_paid - principal
+
+        return (
+            f"Loan terms calculated. Principal: ${principal:,.2f}. "
+            f"Annual interest rate: {annual_rate:.2f}%. "
+            f"Loan term: {n} months. "
+            f"Monthly payment: ${monthly_payment:,.2f}. "
+            f"Total amount paid: ${total_paid:,.2f}. "
+            f"Total interest paid: ${total_interest:,.2f}."
         )
 
     return f"Unknown tool: {name}"
