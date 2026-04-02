@@ -80,7 +80,7 @@ def _normalize_value(key: str, val):
     # proposed_loan_payment: allow rounding within $5
     if key == "proposed_loan_payment":
         if isinstance(val, (int, float)):
-            return round(float(val), 0)
+            return round(float(val) / 5) * 5
         return val
 
     # monthly_gross: round to nearest integer
