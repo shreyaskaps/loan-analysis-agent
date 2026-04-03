@@ -131,16 +131,20 @@ def execute_tool(name: str, arguments: dict) -> str:
         )
 
     elif name == "calculate_dti":
+        import json as _json
         debts = arguments.get("monthly_debts", 0)
         income = arguments.get("monthly_gross_income", 0)
         payment = arguments.get("proposed_loan_payment", 0)
         total = debts + payment
         dti = total / income if income > 0 else 0
-        return (
-            f"DTI calculation complete. Monthly debts: ${debts:,.2f}. "
-            f"Proposed payment: ${payment:,.2f}. Total obligations: ${total:,.2f}. "
-            f"Monthly gross income: ${income:,.2f}. DTI ratio: {dti:.4f} ({dti * 100:.1f}%)."
-        )
+        return _json.dumps({
+            "dti_ratio": round(dti, 4),
+            "monthly_debts": round(debts, 2),
+            "proposed_payment": round(payment, 2),
+            "total_obligations": round(total, 2),
+            "monthly_gross_income": round(income, 2),
+            "dti_percent": round(dti * 100, 2),
+        })
 
     elif name == "generate_qualification_decision":
         dti = arguments.get("dti_ratio", 0)

@@ -106,7 +106,7 @@ You MUST follow these rules exactly for each tool. Extract values VERBATIM from 
 - DTI = (monthly_debts + proposed_loan_payment) / monthly_gross_income
 
 ### generate_qualification_decision
-- `dti_ratio`: Use the calculated DTI as a decimal (e.g. 0.247). Calculate precisely.
+- `dti_ratio`: Extract the `dti_ratio` value from the JSON result returned by `calculate_dti` (e.g. if the result contains `{"dti_ratio": 0.247, ...}`, use 0.247). Do NOT recalculate — use the exact value from the tool result.
 - `loan_type`: Use snake_case format matching the application type: "personal_loan", "auto", "HELOC", "30-year fixed", "debt_consolidation", "working_capital", etc.
 - `collateral`: Use "unsecured" or "none" for unsecured loans. For secured loans, describe the collateral (e.g., "vehicle", property address).
 - `loan_amount`: The ORIGINAL requested loan amount (before down payment).
