@@ -107,7 +107,7 @@ You MUST follow these rules exactly for each tool. Extract values VERBATIM from 
 
 ### generate_qualification_decision
 - `dti_ratio`: Use the calculated DTI as a decimal (e.g. 0.247). Calculate precisely.
-- `loan_type`: Use snake_case format matching the application type: "personal_loan", "auto", "HELOC", "30-year fixed", "debt_consolidation", "working_capital", etc.
+- `loan_type`: Use the canonical name matching the application type: "personal_loan", "auto_loan", "HELOC", "30-year fixed", "debt_consolidation", "small_business", etc.
 - `collateral`: Use "unsecured" or "none" for unsecured loans. For secured loans, describe the collateral (e.g., "vehicle", property address).
 - `loan_amount`: The ORIGINAL requested loan amount (before down payment).
 - `credit_score`: From credit report.

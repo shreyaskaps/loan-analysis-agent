@@ -101,6 +101,39 @@ def _normalize_value(key: str, val):
             return norm
         return val
 
+    # loan_type: normalize common aliases to canonical names
+    if key == "loan_type":
+        if isinstance(val, str):
+            norm = _normalize_str(val)
+            loan_type_aliases = {
+                "auto": "auto_loan",
+                "autoloan": "auto_loan",
+                "carloan": "auto_loan",
+                "car": "auto_loan",
+                "vehicleloan": "auto_loan",
+                "vehicle": "auto_loan",
+                "workingcapital": "small_business",
+                "working_capital": "small_business",
+                "smallbusiness": "small_business",
+                "businessloan": "small_business",
+                "business": "small_business",
+                "sba": "small_business",
+                "personal": "personal_loan",
+                "personalloan": "personal_loan",
+                "debtconsolidation": "debt_consolidation",
+                "consolidation": "debt_consolidation",
+                "homeequity": "HELOC",
+                "heloc": "HELOC",
+                "mortgage30year": "30-year fixed",
+                "30yearfixed": "30-year fixed",
+                "30yr": "30-year fixed",
+            }
+            canonical = loan_type_aliases.get(norm)
+            if canonical:
+                return canonical
+            return val
+        return val
+
     # collateral: convert numeric to string for comparison
     if key == "collateral":
         if isinstance(val, (int, float)):
