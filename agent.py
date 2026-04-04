@@ -263,5 +263,5 @@ class LoanAnalysisAgent:
 
         return {
             "text": final_text,
-            "tool_calls": list(self._accumulated_tool_calls),
+            "tool_calls": new_tool_calls,
         }
