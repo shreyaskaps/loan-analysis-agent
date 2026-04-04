@@ -256,9 +256,6 @@ class LoanAnalysisAgent:
 
             self.messages.append({"role": "user", "content": tool_results})
 
-            if response.stop_reason == "end_turn":
-                break
-
         self._accumulated_tool_calls.extend(new_tool_calls)
 
         return {
