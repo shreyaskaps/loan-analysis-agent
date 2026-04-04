@@ -92,10 +92,18 @@ def _normalize_value(key: str, val):
     # income_type: normalize to canonical groups
     if key == "income_type":
         if isinstance(val, str):
-            norm = _normalize_str(val)
-            w2_types = {"w2", "salary", "paystubs", "pay_stubs", "wages"}
+            # Normalize hyphenated variants to underscore equivalents before group lookup
+            # e.g. "w-2" -> "w_2", then _normalize_str strips underscores -> "w2"
+            pre_norm = val.replace("-", "_")
+            norm = _normalize_str(pre_norm)
+            w2_types = {"w2", "salary", "paystubs", "wages"}
             self_emp_types = {"selfemployed", "1099", "1099contractor", "1099freelance", "contractor"}
-            for group_val, group_set in [("w2_employment", w2_types), ("self_employed", self_emp_types)]:
+            fixed_income_types = {"fixed", "ssapension", "ssa", "pension", "retirement"}
+            for group_val, group_set in [
+                ("w2_employment", w2_types),
+                ("self_employed", self_emp_types),
+                ("fixed_income", fixed_income_types),
+            ]:
                 if norm in group_set:
                     return group_val
             return norm
