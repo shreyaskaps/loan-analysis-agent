@@ -152,7 +152,14 @@ def execute_tool(name: str, arguments: dict) -> str:
         years = arguments.get("employment_years", 0)
         down = arguments.get("down_payment_percent", 0)
 
-        qualified = dti < 0.50 and score >= 580
+        mortgage_keywords = {"mortgage", "heloc", "home equity", "30-year", "15-year", "fixed", "arm"}
+        loan_type_lower = loan_type.lower()
+        is_mortgage = any(kw in loan_type_lower for kw in mortgage_keywords)
+
+        if is_mortgage:
+            qualified = score >= 620 and dti < 0.43
+        else:
+            qualified = score >= 580 and dti < 0.50
         decision = "CONDITIONALLY APPROVED" if qualified else "FURTHER REVIEW NEEDED"
 
         return (
