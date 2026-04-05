@@ -93,8 +93,8 @@ def _normalize_value(key: str, val):
     if key == "income_type":
         if isinstance(val, str):
             norm = _normalize_str(val)
-            w2_types = {"w2", "salary", "paystubs", "pay_stubs", "wages"}
-            self_emp_types = {"selfemployed", "1099", "1099contractor", "1099freelance", "contractor"}
+            w2_types = {"w2", "salary", "paystubs", "pay_stubs", "wages", "salaried", "w2employee", "fulltime", "hourly"}
+            self_emp_types = {"selfemployed", "1099", "1099contractor", "1099freelance", "contractor", "freelance", "selfemployment", "independentcontractor"}
             for group_val, group_set in [("w2_employment", w2_types), ("self_employed", self_emp_types)]:
                 if norm in group_set:
                     return group_val
