@@ -33,6 +33,14 @@ Before calling any tool, match the user's request to the right tool:
 - `analyze_income`: Use ONLY when processing income documents (pay stubs, W-2s, 1099s, tax returns). Do NOT use for loan term/payment calculations.
 - `calculate_dti`: Use ONLY when computing debt-to-income ratio from known monthly debts, income, and proposed payment. Do NOT use as a substitute for `calculate_loan_terms`.
 - `generate_qualification_decision`: Use ONLY after `calculate_dti` to produce a final pre-qualification decision.
+- `web_search`: Use to search for CURRENT information when the user asks about:
+  - Current loan rates (mortgage, auto, personal, etc.)
+  - Market conditions or economic factors affecting lending
+  - Specific lender requirements or loan products
+  - Refinancing opportunities at today's rates
+  - Whether rates are favorable for borrowing/refinancing
+  - Comparison of rates across lenders
+  Do NOT use this for calculations you can do with the tools above. Call this tool PROACTIVELY if the user mentions "current rates", "today", "now", "recent", or asks about refinancing.
 
 If the user provides loan amount, rate, or term data and asks about payments or loan structure, prefer `calculate_loan_terms` unless the user explicitly asks for a DTI or qualification decision.
 
