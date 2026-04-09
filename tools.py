@@ -1,6 +1,19 @@
 """Tool definitions and implementations for the loan analysis agent."""
 
+import anthropic
+
 TOOL_DEFINITIONS = [
+    {
+        "name": "web_search",
+        "description": "Search the web for current information about loan rates, lending criteria, economic conditions, or other financial data relevant to loan analysis. Use this tool to find real-time data when the user asks about current rates, market conditions, or specific lender requirements.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query to find relevant financial information (e.g., 'current auto loan rates 2024', 'FHA loan requirements', 'mortgage rates by credit score')"},
+            },
+            "required": ["query"],
+        },
+    },
     {
         "name": "analyze_income",
         "description": "Analyze and verify income from uploaded pay stubs, W-2s, tax returns, or other income documentation. Call this tool after extracting income details from the user's uploaded documents.",
@@ -86,7 +99,34 @@ TOOL_DEFINITIONS = [
 
 def execute_tool(name: str, arguments: dict) -> str:
     """Execute a tool and return a result string."""
-    if name == "analyze_income":
+    if name == "web_search":
+        query = arguments.get("query", "")
+        # Use Anthropic's web search API
+        client = anthropic.Anthropic()
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1024,
+            tools=[
+                {
+                    "type": "builtin_tool",
+                    "name": "brave_web_search",
+                }
+            ],
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"Search the web for information about: {query}. Provide a summary of the findings."
+                }
+            ],
+        )
+        # Extract text from the response
+        result_text = ""
+        for block in response.content:
+            if hasattr(block, "text"):
+                result_text += block.text
+        return f"Web search results for '{query}': {result_text}" if result_text else f"Web search completed for query: {query}"
+    
+    elif name == "analyze_income":
         monthly = arguments.get("monthly_gross", 0)
         annual = arguments.get("annual_income", 0)
         employer = arguments.get("employer", "Unknown")
