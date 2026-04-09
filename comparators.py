@@ -101,8 +101,14 @@ def _normalize_value(key: str, val):
             return norm
         return val
 
-    # collateral: convert numeric to string for comparison
+    # collateral: normalize unsecured variants to canonical "unsecured"
     if key == "collateral":
+        if isinstance(val, str):
+            norm = _normalize_str(val).replace(" ", "")  # Remove spaces for matching
+            unsecured_variants = {"none", "unsecured", "na", "nocollateral", "noasset", "n/a"}
+            if norm in unsecured_variants:
+                return "unsecured"
+            return val
         if isinstance(val, (int, float)):
             return str(val)
         return val

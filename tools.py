@@ -2,6 +2,19 @@
 
 TOOL_DEFINITIONS = [
     {
+        "name": "calculate_loan_terms",
+        "description": "Calculate loan payment, total cost, and amortization schedule based on loan amount, interest rate, and loan term. Call this when the user provides loan parameters and wants to know monthly payments or total cost.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "loan_amount": {"type": "number", "description": "The loan amount in dollars"},
+                "annual_interest_rate": {"type": "number", "description": "The annual interest rate as a percentage (e.g., 7.5 for 7.5%)"},
+                "loan_term_months": {"type": "number", "description": "The loan term in months"},
+            },
+            "required": ["loan_amount", "annual_interest_rate", "loan_term_months"],
+        },
+    },
+    {
         "name": "analyze_income",
         "description": "Analyze and verify income from uploaded pay stubs, W-2s, tax returns, or other income documentation. Call this tool after extracting income details from the user's uploaded documents.",
         "input_schema": {
@@ -86,7 +99,28 @@ TOOL_DEFINITIONS = [
 
 def execute_tool(name: str, arguments: dict) -> str:
     """Execute a tool and return a result string."""
-    if name == "analyze_income":
+    if name == "calculate_loan_terms":
+        loan_amount = arguments.get("loan_amount", 0)
+        annual_rate = arguments.get("annual_interest_rate", 0)
+        loan_months = arguments.get("loan_term_months", 0)
+        
+        monthly_rate = annual_rate / 100 / 12
+        if monthly_rate == 0:
+            monthly_payment = loan_amount / loan_months if loan_months > 0 else 0
+        else:
+            monthly_payment = loan_amount * (monthly_rate * (1 + monthly_rate) ** loan_months) / ((1 + monthly_rate) ** loan_months - 1)
+        
+        total_cost = monthly_payment * loan_months
+        total_interest = total_cost - loan_amount
+        
+        return (
+            f"Loan terms calculated. Loan amount: ${loan_amount:,.0f}. "
+            f"Annual interest rate: {annual_rate}%. Loan term: {loan_months} months. "
+            f"Monthly payment: ${monthly_payment:,.2f}. Total interest: ${total_interest:,.2f}. "
+            f"Total cost: ${total_cost:,.2f}."
+        )
+
+    elif name == "analyze_income":
         monthly = arguments.get("monthly_gross", 0)
         annual = arguments.get("annual_income", 0)
         employer = arguments.get("employer", "Unknown")
