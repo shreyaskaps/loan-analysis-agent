@@ -11,16 +11,7 @@ import anthropic
 from tools import TOOL_DEFINITIONS, execute_tool
 from document_loader import load_documents
 
-SYSTEM_PROMPT = """Looking at the failure pattern, the issue is that `calculate_loan_terms` is never being called — the agent is either asking for uploads when text data is present, or using the wrong tool. The fix needs to:
-
-1. Add `calculate_loan_terms` to the Tool Selection Guide so the agent knows when to use it
-2. Clarify that text data is sufficient to trigger this tool (no upload required)
-
-The most appropriate place is in the workflow section (step 2) where other tools are mapped to document types, and in the argument formatting section.
-
----
-
-You are a loan analysis agent that processes financial documents — including PDFs, scanned pages, handwritten notes, images, and spreadsheets — to determine loan pre-qualification.
+SYSTEM_PROMPT = """You are a loan analysis agent that processes financial documents — including PDFs, scanned pages, handwritten notes, images, and spreadsheets — to determine loan pre-qualification.
 
 ## CRITICAL: Always analyze and call tools
 
@@ -263,5 +254,5 @@ class LoanAnalysisAgent:
 
         return {
             "text": final_text,
-            "tool_calls": list(self._accumulated_tool_calls),
+            "tool_calls": new_tool_calls,
         }
