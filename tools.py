@@ -3,30 +3,60 @@
 TOOL_DEFINITIONS = [
     {
         "name": "analyze_income",
-        "description": "Analyze and verify income from uploaded pay stubs, W-2s, tax returns, or other income documentation. Call this tool after extracting income details from the user's uploaded documents.",
+        "description": (
+            "Analyze and verify income documentation. Call this IMMEDIATELY when you see "
+            "income data from pay stubs, W-2s, tax returns, or offer letters. "
+            "Do NOT wait for additional documents — call once per employer/income source. "
+            "For job changes, call SEPARATELY for each employer."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "employer": {"type": "string", "description": "Employer name from pay stubs or tax docs"},
-                "income_type": {"type": "string", "description": "Income type: W2, 1099, W-2, W-2 + 1099, W-2 + 1099 + rental, SSA + pension, self-employed, etc."},
-                "annual_income": {"type": "number", "description": "Annual gross income in dollars"},
-                "monthly_gross": {"type": "number", "description": "Monthly gross income in dollars"},
-                "years_employed": {"type": "number", "description": "Years employed with current employer"},
-                "additional_income": {"type": "number", "description": "Additional monthly or annual income (rental, freelance, etc). Use 0 if none."},
+                "employer": {"type": "string", "description": "Exact employer name from the document"},
+                "income_type": {
+                    "type": "string",
+                    "description": "Income type exactly as described: W2, W-2, 1099, salary, self-employed, W-2 + 1099, SSA + pension, fixed, etc.",
+                },
+                "annual_income": {"type": "number", "description": "Annual gross income in dollars. If only monthly given, multiply by 12."},
+                "monthly_gross": {"type": "number", "description": "Monthly gross income in dollars. If only annual given, divide by 12."},
+                "years_employed": {"type": "number", "description": "Years at THIS specific employer (not total work history). Use 0.25 for 3 months, etc."},
+                "additional_income": {"type": "number", "description": "Additional income (rental, freelance, etc). Use 0 if none mentioned."},
             },
             "required": ["employer", "income_type", "annual_income", "monthly_gross", "years_employed", "additional_income"],
         },
+        "input_examples": [
+            {
+                "employer": "BrightLayer Tech",
+                "income_type": "W-2 salary",
+                "annual_income": 88500,
+                "monthly_gross": 7375,
+                "years_employed": 3,
+                "additional_income": 0,
+            },
+            {
+                "employer": "Sara Patel Consulting",
+                "income_type": "self-employed",
+                "annual_income": 64800,
+                "monthly_gross": 5400,
+                "years_employed": 4,
+                "additional_income": 0,
+            },
+        ],
     },
     {
         "name": "analyze_bank_statements",
-        "description": "Analyze bank statements for cash flow health, reserves, overdrafts, and deposit patterns. Call this after extracting bank statement details from user uploads.",
+        "description": (
+            "Analyze bank statements for cash flow, reserves, and deposit patterns. "
+            "Call this IMMEDIATELY when you see bank statement data — do NOT ask for clarification. "
+            "Extract all values from the document description."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "num_months": {"type": "number", "description": "Number of months of statements provided"},
-                "overdrafts": {"type": "number", "description": "Number of overdrafts in the statement period"},
+                "num_months": {"type": "number", "description": "Number of months of statements"},
+                "overdrafts": {"type": "number", "description": "Number of overdrafts. Use 0 if none mentioned, use 1 if 'one overdraft' mentioned."},
                 "large_deposits": {
-                    "description": "Large or unusual deposits. Single number or array of amounts. Use 0 if none.",
+                    "description": "Large/unusual deposits. Array of numbers like [8000, 3200] for multiple, single number for one, or 0 if none.",
                 },
                 "monthly_deposits": {"type": "number", "description": "Average monthly deposit amount"},
                 "monthly_withdrawals": {"type": "number", "description": "Average monthly withdrawal amount"},
@@ -34,25 +64,63 @@ TOOL_DEFINITIONS = [
             },
             "required": ["num_months", "overdrafts", "large_deposits", "monthly_deposits", "monthly_withdrawals", "average_monthly_balance"],
         },
+        "input_examples": [
+            {
+                "num_months": 8,
+                "overdrafts": 1,
+                "large_deposits": 0,
+                "monthly_deposits": 5200,
+                "monthly_withdrawals": 3800,
+                "average_monthly_balance": 6500,
+            },
+            {
+                "num_months": 24,
+                "overdrafts": 3,
+                "large_deposits": [12000, 8000],
+                "monthly_deposits": 5400,
+                "monthly_withdrawals": 3150,
+                "average_monthly_balance": 4200,
+            },
+        ],
     },
     {
         "name": "check_credit_profile",
-        "description": "Check and evaluate a credit report. Call this after extracting credit report details from user uploads.",
+        "description": (
+            "Check borrower's credit profile. Call this as soon as you have credit_score AND open_accounts. "
+            "Do NOT wait for credit_utilization or credit_history_years — those are optional. "
+            "Only include optional fields if the user/document explicitly provided them."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "credit_score": {"type": "number", "description": "Credit score (FICO or Vantage equivalent)"},
-                "open_accounts": {"type": "number", "description": "Number of open credit accounts"},
-                "derogatory_marks": {"description": "Number of derogatory marks or 'none'"},
-                "credit_utilization": {"description": "Credit utilization as decimal (0.18) or percentage (18)"},
-                "credit_history_years": {"type": "number", "description": "Length of credit history in years"},
+                "credit_score": {"type": "number", "description": "Credit score (FICO or equivalent)"},
+                "open_accounts": {"type": "number", "description": "Total number of open credit accounts"},
+                "derogatory_marks": {"description": "Number of derogatory marks, or 'none'. OMIT if not provided."},
+                "credit_utilization": {"description": "Credit utilization as decimal (0.18) or percentage (18). OMIT if not provided."},
+                "credit_history_years": {"type": "number", "description": "Years of credit history. OMIT if not provided."},
             },
-            "required": ["credit_score", "open_accounts", "derogatory_marks", "credit_utilization", "credit_history_years"],
+            "required": ["credit_score", "open_accounts"],
         },
+        "input_examples": [
+            {
+                "credit_score": 685,
+                "open_accounts": 5,
+            },
+            {
+                "credit_score": 720,
+                "open_accounts": 6,
+                "derogatory_marks": "none",
+                "credit_utilization": 12,
+                "credit_history_years": 8,
+            },
+        ],
     },
     {
         "name": "calculate_dti",
-        "description": "Calculate debt-to-income ratio. Call this with the borrower's monthly debts, gross income, and proposed new loan payment.",
+        "description": (
+            "Calculate debt-to-income ratio. Call this when you have monthly debts, "
+            "gross income, and proposed loan payment amounts."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -62,17 +130,27 @@ TOOL_DEFINITIONS = [
             },
             "required": ["monthly_debts", "monthly_gross_income", "proposed_loan_payment"],
         },
+        "input_examples": [
+            {
+                "monthly_debts": 850,
+                "monthly_gross_income": 7375,
+                "proposed_loan_payment": 1200,
+            },
+        ],
     },
     {
         "name": "generate_qualification_decision",
-        "description": "Generate a preliminary loan qualification decision based on all gathered data. Call this after income analysis, bank analysis, credit check, and DTI calculation are complete.",
+        "description": (
+            "Generate preliminary loan qualification decision. "
+            "Call this IMMEDIATELY after calculate_dti, using all gathered data."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "dti_ratio": {"type": "number", "description": "Calculated DTI ratio as decimal (e.g. 0.35)"},
-                "loan_type": {"type": "string", "description": "Loan type: personal_loan, auto_loan, HELOC, 30-year fixed, small_business, etc."},
+                "loan_type": {"type": "string", "description": "Loan type: personal_loan, auto_loan, HELOC, 30-year fixed, small_business, debt_consolidation, etc."},
                 "collateral": {"type": "string", "description": "Collateral description or 'none'/'unsecured'"},
-                "loan_amount": {"type": "number", "description": "Requested loan amount"},
+                "loan_amount": {"type": "number", "description": "Requested loan amount (original, before down payment)"},
                 "credit_score": {"type": "number", "description": "Borrower's credit score"},
                 "annual_income": {"type": "number", "description": "Borrower's annual income"},
                 "employment_years": {"type": "number", "description": "Years of employment"},
@@ -80,6 +158,18 @@ TOOL_DEFINITIONS = [
             },
             "required": ["dti_ratio", "loan_type", "collateral", "loan_amount", "credit_score", "annual_income", "employment_years", "down_payment_percent"],
         },
+        "input_examples": [
+            {
+                "dti_ratio": 0.247,
+                "loan_type": "30-year fixed",
+                "collateral": "residential property",
+                "loan_amount": 350000,
+                "credit_score": 720,
+                "annual_income": 88500,
+                "employment_years": 3,
+                "down_payment_percent": 10,
+            },
+        ],
     },
 ]
 
